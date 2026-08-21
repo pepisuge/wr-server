@@ -1,0 +1,7 @@
+{
+  "name": "warrock-node-server",
+  "private": true,
+  "dependencies": {
+    "mysql2": "^3.11.0"
+  }
+}

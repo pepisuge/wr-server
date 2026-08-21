@@ -1,0 +1,11 @@
+# Portable MariaDB runtime + live database data - a downloaded binary
+# distribution and local DB state, not source. ~450MB, regenerate by
+# re-extracting MariaDB and reloading Databases/*.SQL from WarRock-Chapter-1-Server.
+mariadb-portable/
+
+# npm dependencies - regenerate with `npm install` in node/ (package-lock.json is tracked).
+node_modules/
+
+# Editor/OS noise
+.vscode/
+*.log

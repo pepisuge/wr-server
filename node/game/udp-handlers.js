@@ -1,0 +1,117 @@
+// Ported from Game/Networking/UDPListener.cs. This is a *different* binary
+// protocol from the text+XOR one on TCP: fixed-offset fields, big-endian
+// ("network byte order") integers - Node's Buffer already reads/writes those
+// natively, no manual byte-reversal needed like the C# does.
+const { users, getChannel } = require('./state');
+
+const INITIAL = 0x1001;
+const PING = 0x1010; // also the envelope for the "tunnel" (relay) sub-packets below
+
+// Sub-command byte at offset 14 within a PING-type packet that means "relay
+// this to another player" rather than "this is the handshake ping" (0x21).
+// The reference doesn't decode what's *inside* - movement, aim, shooting -
+// it just forwards the whole packet untouched between the two clients'
+// public UDP endpoints, using itself as a rendezvous point.
+const TUNNEL_SUBCOMMANDS = new Set([0x10, 0x30, 0x31, 0x32, 0x34]);
+
+// Sample logger for reverse-engineering the tunnel payload: we're the relay
+// point, so we already see every byte in plaintext - no external capture
+// needed. Logs the first occurrence of each (sub-command, length) shape,
+// then a periodic refresh so changing fields (position, angle) are visible
+// across samples, without flooding the console every single frame.
+const seenShapes = new Map();
+function logTunnelSample(msg) {
+  const key = `${msg[14]}:${msg.length}`;
+  const count = (seenShapes.get(key) || 0) + 1;
+  seenShapes.set(key, count);
+  if (count === 1 || count % 20 === 0) {
+    console.log(`[udp-tunnel] sub=0x${msg[14].toString(16)} len=${msg.length} #${count} hex=${msg.toString('hex')}`);
+  }
+}
+
+// Same XOR idea as the TCP side, just applied to raw 6-byte IP:port blobs
+// instead of a whole text packet. Values match Game/Networking/UDPListener.cs's
+// UdpReader (its local "SendKey"/"ReceiveKey" names are swapped vs
+// Core/Constants.cs, but the actual bytes used for each direction match).
+const READ_KEY = 0xc3; // decrypting an endpoint the client sent us
+const WRITE_KEY = 0x96; // encrypting an endpoint we send back
+
+function readEndpoint(buf, offset) {
+  const b = Buffer.from(buf.subarray(offset, offset + 6)).map((x) => x ^ READ_KEY);
+  return { ip: `${b[2]}.${b[3]}.${b[4]}.${b[5]}`, port: b.readUInt16LE(0) };
+}
+
+function writeEndpoint(buf, offset, ip, port) {
+  const octets = ip.split('.').map(Number);
+  const value = Buffer.from([port & 0xff, (port >> 8) & 0xff, ...octets]).reverse();
+  for (let i = 0; i < 6; i++) buf[offset + i] = value[i] ^ WRITE_KEY;
+}
+
+// type(u16 BE) @0, sessionId(u16 BE) @4. Client sends this on UDP1 (5350) to
+// kick off the UDP side of the session; server replies with the same packet
+// but pointing it at UDP2 (5350+1=5351) for whatever comes next.
+function handleInitial(socket, msg, rinfo, port) {
+  const reply = Buffer.from(msg);
+  reply.writeUInt16BE(port + 1, 4);
+  socket.send(reply, rinfo.port, rinfo.address);
+}
+
+// Client reports its own (local) ip:port at offset 32; server echoes back
+// both that and the endpoint it actually saw the packet arrive from (they
+// can differ behind NAT) so the client learns its real public address. This
+// is also our only chance to learn the player's public UDP endpoint, needed
+// below to relay movement/shooting packets to them later.
+function handlePingHandshake(socket, msg, rinfo) {
+  const sessionId = msg.readUInt16BE(4);
+  const localEndpoint = readEndpoint(msg, 32);
+
+  const u = users.get(sessionId);
+  if (u) u.udpEndpoint = { address: rinfo.address, port: rinfo.port };
+
+  const response = Buffer.alloc(65);
+  msg.copy(response, 0, 0, Math.min(msg.length, 65));
+  response[17] = 0x41;
+  response[64] = 0x11;
+  response.writeUInt16BE(sessionId, 4);
+  writeEndpoint(response, 32, rinfo.address, rinfo.port);
+  writeEndpoint(response, 50, localEndpoint.ip, localEndpoint.port);
+  socket.send(response, rinfo.port, rinfo.address);
+}
+
+// Ported from the `else if (packet[14] == 0x10 || ...)` branch of
+// UDPListener.Handle(). sessionId/room/targetId are all plain big-endian
+// u16 fields (the reference reads sessionId via a byte-swap dance that
+// works out to the same value as a direct big-endian read at offset 4).
+// Both players must be confirmed in the same *Playing* room - otherwise
+// this would be a free relay for anyone who guesses two session ids.
+function handleTunnel(socket, msg, rinfo) {
+  logTunnelSample(msg);
+
+  const sessionId = msg.readUInt16BE(4);
+  const roomId = msg.readUInt16BE(6);
+  const targetId = msg.readUInt16BE(22);
+
+  const sender = users.get(sessionId);
+  const target = users.get(targetId);
+  if (!sender || !target || sender.roomId !== roomId || target.roomId !== roomId) return;
+
+  const room = getChannel(sender.channel).rooms.get(roomId);
+  if (!room || room.state !== 2) return; // Playing
+
+  if (target.udpEndpoint) socket.send(msg, target.udpEndpoint.port, target.udpEndpoint.address);
+}
+
+function handleUdpPacket(socket, msg, rinfo, port) {
+  const type = msg.readUInt16BE(0);
+
+  if (type === INITIAL) return handleInitial(socket, msg, rinfo, port);
+  if (type === PING) {
+    if (msg[14] === 0x21) return handlePingHandshake(socket, msg, rinfo);
+    if (TUNNEL_SUBCOMMANDS.has(msg[14])) return handleTunnel(socket, msg, rinfo);
+    return;
+  }
+
+  console.log(`UDP:${port} unhandled type=0x${type.toString(16)} from ${rinfo.address}:${rinfo.port}`);
+}
+
+module.exports = { handleUdpPacket };

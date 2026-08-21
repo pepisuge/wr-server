@@ -1,0 +1,3 @@
+[submodule "WarRock-Chapter-1-Server"]
+	path = WarRock-Chapter-1-Server
+	url = https://github.com/sweetriverfish/WarRock-Chapter-1-Server.git
