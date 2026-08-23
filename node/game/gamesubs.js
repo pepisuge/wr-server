@@ -36,6 +36,7 @@ const SUB = {
   READY: 50,
   SIDE_UPDATE: 56,
   USER_LIMIT: 58,
+  AUTO_START: 62,
   PING_LIMIT: 59,
   SPAWN: 150,
   GET_MISSION: 402,
@@ -67,7 +68,7 @@ function handleReady(room, player, payload) {
   player.ready = !player.ready;
   const out = [...payload];
   out[2] = player.ready ? 1 : 0;
-  return { payload: out };
+  return { payload: out, checkAutoStart: true };
 }
 
 // Ported from Game/Handlers/Game/Lobby/ChangeSide.cs + Room.SwitchSide.
@@ -91,26 +92,32 @@ function handleSideUpdate(room, player, payload) {
   out[2] = player.team;
   out[3] = player.slot; // the *new* slot - the header still carries the old one
   out[4] = room.master;
-  return { payload: out };
+  return { payload: out, checkAutoStart: true };
 }
 
-// Ported from Game/Handlers/Game/Lobby/Start.cs. Skips the AccessLevel/
-// AllowStartAlone override - just "everyone ready, at least 2 players,
-// teams balanced within MAX_TEAM_DIFFERENCE for team-based modes" (a room
-// where every player sits on the same team, e.g. Explosive/TDM, is exactly
-// what this blocks - FFA has no teams and is exempt). Doesn't actually load
-// a map (no MapManager yet) - just flips the room to Playing so the client
-// moves on.
-function handleStart(room, player, payload, u, db) {
-  if (player.slot !== room.master || room.state !== 1) return null;
+// Same "can this room start a match right now" check Start.cs gates on:
+// everyone ready, at least 2 players, teams balanced within
+// MAX_TEAM_DIFFERENCE for team-based modes (a room where every player sits
+// on the same team, e.g. Explosive/TDM, is exactly what this blocks - FFA
+// has no teams and is exempt). Shared by the manual Start handler and the
+// autostart trigger below.
+function canStart(room) {
   const players = [...room.players.values()];
-  if (!players.every((p) => p.ready) || players.length < 2) return null;
+  if (!players.every((p) => p.ready) || players.length < 2) return false;
   if (room.mode !== FFA_MODE) {
     const team0 = players.filter((p) => p.team === 0).length;
     const team1 = players.filter((p) => p.team === 1).length;
-    if (Math.abs(team0 - team1) > MAX_TEAM_DIFFERENCE) return null;
+    if (Math.abs(team0 - team1) > MAX_TEAM_DIFFERENCE) return false;
   }
+  return true;
+}
 
+// The state mutation that actually begins a match, shared by the manual
+// Start handler and the autostart trigger - ported from Room.Start()/
+// TeamDeathMatch.Initilize. Doesn't actually load a map (no MapManager yet)
+// - just flips the room to Playing so the client moves on.
+function beginMatch(room, db) {
+  const players = [...room.players.values()];
   // Fresh round: clear last round's health/kills/deaths (Player.Reset/RoundStart).
   for (const p of players) {
     p.health = 100;
@@ -145,9 +152,46 @@ function handleStart(room, player, payload, u, db) {
   // generic downTick (3600000) first, which initExplosiveMatch then
   // overwrites with the real per-round time (Fase 27).
   if (room.mode === EXPLOSIVE_MODE) initExplosiveMatch(room);
+}
+
+// Ported from Game/Handlers/Game/Lobby/Start.cs. Skips the AccessLevel/
+// AllowStartAlone override.
+function handleStart(room, player, payload, u, db) {
+  if (player.slot !== room.master || room.state !== 1) return null;
+  if (!canStart(room)) return null;
+  beginMatch(room, db);
   const out = [...payload];
   out[2] = room.map;
   return { newType: SUB.START_REPLY, payload: out, updateLobby: true };
+}
+
+// New work, not a port: neither C# reference has any logic that reads
+// AutoStart/autostart to actually trigger a match - it's write-only in both
+// (parsed/toggled and shown to the client, never consumed). Called after a
+// Ready/SideUpdate ack (or the autostart toggle itself) already went out -
+// see handleGamePacket's `result.checkAutoStart` - so this always sends its
+// own separate GAME_PACKET broadcast rather than returning a result, since
+// the dispatcher's one reply slot is already used by the triggering action.
+function tryAutoStart(room, db) {
+  if (!room.autoStart || room.state !== 1 || !canStart(room)) return;
+  beginMatch(room, db);
+  const fields = [1, room.master, room.id, 2, SUB.START_REPLY, 0, 0, room.map];
+  const sockets = [...room.players.keys()].map((sid) => users.get(sid)?.socket).filter(Boolean);
+  broadcastPacket(sockets, XOR.external, GAME_PACKET, fields);
+}
+
+// Ported from Handlers/Game/Lobby/ToggleAutostart.cs (GameSubs.Autostart=62,
+// WarRock-Chapter-1-Server - the only one of the two references where this
+// toggle actually works; WarRock-ToXiiC-Core registers the same opcode but
+// its handler never touches the field). Host-only, only while Waiting, flips
+// room.autoStart and echoes the new state in payload[2]. checkAutoStart
+// covers turning it on when the room already meets the start conditions.
+function handleAutoStart(room, player, payload) {
+  if (player.slot !== room.master || room.state !== 1) return null;
+  room.autoStart = !room.autoStart;
+  const out = padded(payload, 3);
+  out[2] = room.autoStart ? 1 : 0;
+  return { payload: out, updateLobby: true, checkAutoStart: true };
 }
 
 // Ported from Game/Handlers/Game/{ChangeMap,ChangeSubMode,ChangePinglimit}.cs.
@@ -572,6 +616,7 @@ const HANDLERS = {
   [SUB.READY]: handleReady,
   [SUB.SIDE_UPDATE]: handleSideUpdate,
   [SUB.USER_LIMIT]: handleUserLimit,
+  [SUB.AUTO_START]: handleAutoStart,
   [SUB.START]: handleStart,
   [SUB.MAP_UPDATE]: settingHandler('map'),
   [SUB.MODE_UPDATE]: handleModeUpdate,
@@ -630,6 +675,7 @@ function handleGamePacket(socket, pkt, db) {
   broadcastPacket(sockets, XOR.external, GAME_PACKET, fields);
 
   if (result.updateLobby) sendRoomUpdateToLobby(room, true);
+  if (result.checkAutoStart) tryAutoStart(room, db);
 }
 
 module.exports = { handleGamePacket, GAME_PACKET, handleScoreboardRequest, SCOREBOARD };
