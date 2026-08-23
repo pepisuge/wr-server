@@ -44,9 +44,18 @@ async function main() {
       logPacket('Game IN', pkt);
       const handler = handlers[pkt.id];
       // A rejected/thrown handler must never crash the whole process over
-      // one bad packet - it did exactly that once (an async DB error in a
-      // GM command with no catch anywhere up the call chain).
-      if (handler) Promise.resolve(handler(socket, pkt)).catch((err) => console.error(`Game handler id=${pkt.id} failed:`, err.message));
+      // one bad packet - it did exactly that twice: once from an async DB
+      // error in a GM command, and once from a handler throwing
+      // synchronously (Promise.resolve(handler(...)) only wraps the call
+      // *after* it returns, so a sync throw escapes the .catch() below
+      // entirely - the try/catch is what actually closes that gap).
+      if (handler) {
+        try {
+          Promise.resolve(handler(socket, pkt)).catch((err) => console.error(`Game handler id=${pkt.id} failed:`, err.message));
+        } catch (err) {
+          console.error(`Game handler id=${pkt.id} failed:`, err.message);
+        }
+      }
     });
     sendGreeting(socket);
     socket.on('close', () => console.log('Game: disconnected'));

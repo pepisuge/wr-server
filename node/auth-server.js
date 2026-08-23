@@ -16,7 +16,17 @@ function startListener(port, keys, label, handlers = {}) {
     wrapSocket(socket, keys, (pkt) => {
       logPacket(`${label} IN`, pkt);
       const handler = handlers[pkt.id];
-      if (handler) Promise.resolve(handler(socket, pkt)).catch((err) => console.error(`${label} handler id=${pkt.id} failed:`, err.message));
+      // Same fix as game-server.js: Promise.resolve(handler(...)) only
+      // catches a rejected promise, not a handler that throws synchronously
+      // before returning one - the try/catch is what actually stops a bad
+      // packet from taking down the whole process.
+      if (handler) {
+        try {
+          Promise.resolve(handler(socket, pkt)).catch((err) => console.error(`${label} handler id=${pkt.id} failed:`, err.message));
+        } catch (err) {
+          console.error(`${label} handler id=${pkt.id} failed:`, err.message);
+        }
+      }
     });
     sendGreeting(socket);
     socket.on('close', () => console.log(`${label}: disconnected`));
