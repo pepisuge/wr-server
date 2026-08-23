@@ -150,8 +150,8 @@ function handleStart(room, player, payload, u, db) {
   return { newType: SUB.START_REPLY, payload: out, updateLobby: true };
 }
 
-// Ported from Game/Handlers/Game/{ChangeMap,ChangeMode,ChangeSubMode,ChangePinglimit}.cs.
-// All four are the same shape: master-only, room still Waiting, apply
+// Ported from Game/Handlers/Game/{ChangeMap,ChangeSubMode,ChangePinglimit}.cs.
+// All three are the same shape: master-only, room still Waiting, apply
 // payload[2] to one room field, echo it back as the ack. Real map/mode
 // rotation validity (does this map exist for this mode?) isn't checked -
 // this just records whatever the client's own UI already validated.
@@ -161,6 +161,22 @@ function settingHandler(field) {
     room[field] = Number(payload[2]);
     return { payload, updateLobby: true };
   };
+}
+
+// Ported from Game/Handlers/Game/Lobby/ChangeMode.cs's Room.Mode assignment
+// - but NOT its payload[2] read. A live capture of a real FFA-switch attempt
+// showed payload[0]=1 (FFA's real Mode enum value) while payload[2] stayed 0
+// (Explosive) - the room silently reverted to Explosive instead of
+// switching. Same flavor as this session's RoomKick/RoomInvite field-offset
+// finds: this client just doesn't put the value where the reference does
+// for this one sub. The other three settingHandler subs aren't touched -
+// no evidence they're wrong, only this one was observed failing live.
+function handleModeUpdate(room, player, payload) {
+  if (player.slot !== room.master || room.state !== 1) return null;
+  const mode = Number(payload[0]);
+  if (![EXPLOSIVE_MODE, FFA_MODE, TDM_MODE].includes(mode)) return null;
+  room.mode = mode;
+  return { payload, updateLobby: true };
 }
 
 // Ported from Handlers/Game/Lobby/ToggleUserlimit.cs: host-only, only while
@@ -558,7 +574,7 @@ const HANDLERS = {
   [SUB.USER_LIMIT]: handleUserLimit,
   [SUB.START]: handleStart,
   [SUB.MAP_UPDATE]: settingHandler('map'),
-  [SUB.MODE_UPDATE]: settingHandler('mode'),
+  [SUB.MODE_UPDATE]: handleModeUpdate,
   [SUB.CHANGE_ROUNDS]: settingHandler('setting'),
   [SUB.CHANGE_KILLS]: settingHandler('setting'),
   [SUB.PING_LIMIT]: settingHandler('pingLimit'),

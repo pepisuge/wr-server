@@ -365,6 +365,33 @@ function handleRoomJoin(socket, pkt) {
   sendRoomUpdateToLobby(room, true);
 }
 
+// Ported from Room.Remove's master-reassignment block: only runs when the
+// player who just left WAS the master (callers check that). Priority is
+// 1+Premium per occupied slot, scanned in slot order 0..maxPlayers-1 so a
+// tie (no premium anywhere) goes to the lowest slot - same tie-break the
+// reference gets for free from its own `>` (not `>=`) comparison. Also
+// drops Supermaster, matching Room.Remove's "Remove the suppermaster buff".
+function reassignMaster(room) {
+  room.supermaster = false;
+  const bySlot = new Map([...room.players.values()].map((p) => [p.slot, p]));
+  let newMaster = null;
+  let bestPriority = 0;
+  for (let slot = 0; slot < room.maxPlayers; slot++) {
+    const p = bySlot.get(slot);
+    if (!p) continue;
+    const pu = users.get(p.sessionId);
+    const priority = 1 + (pu ? pu.premium : 0);
+    if (priority > bestPriority) {
+      bestPriority = priority;
+      newMaster = p;
+    }
+  }
+  if (newMaster) {
+    room.master = newMaster.slot;
+    newMaster.ready = true; // Room.Remove: `Players[Master].Ready = true`
+  }
+}
+
 // Shared by handleRoomLeave (explicit ROOM_LEAVE packet) and the socket
 // 'close' handler (handlers.js) - a dropped connection (crash, closed
 // client, no explicit leave) must clean up the room the same way an
@@ -376,6 +403,12 @@ function handleRoomJoin(socket, pkt) {
 // - if they're the second-to-last player standing, endRound() (below) pays
 // everyone else and declares a winner; if only they quietly leave a
 // still-full room, this is the only reward that happens for them.
+// Does NOT notify the lobby itself (see notifyLobbyAfterLeave) - a real
+// client that left a room stopped reacting to lobby room-list updates that
+// arrived before its own RoomLeave reply, matching Room.Remove/Destroy's own
+// packet order (member broadcast, then reply to the leaver, then - only
+// after that, back in the RoomLeave *handler* - the lobby update). Callers
+// own sequencing their own reply between this and notifyLobbyAfterLeave.
 // Returns the room left (or null if not in one).
 function removeFromRoom(db, u) {
   if (!u || u.roomId === null) return null;
@@ -395,27 +428,23 @@ function removeFromRoom(db, u) {
 
   const wasPlaying = room.state === 2;
   const oldSlot = player?.slot ?? 0;
+  const wasMaster = oldSlot === room.master;
   room.players.delete(u.sessionId);
   u.roomId = null;
 
   if (room.players.size === 0) {
     stopRoundTimer(room);
     chan.rooms.delete(room.id);
-    sendRoomDeleteToLobby(room.channel, room.id);
-  } else if (wasPlaying && room.players.size === 1) {
-    endRound(room, db); // last one standing wins
-    room.master = 0;
-    sendRoomUpdateToLobby(room, true);
   } else {
-    room.master = 0; // ponytail: no real slot tracking, master stays "slot 0"
-    sendRoomUpdateToLobby(room, true);
+    if (wasMaster) reassignMaster(room);
+    if (wasPlaying && room.players.size === 1) endRound(room, db); // last one standing wins
   }
 
   // Ported from Room.Remove/Destroy's `Send(pBuffer); u.Send(pBuffer);` -
   // remaining players' own roster never drops someone who left unless they
-  // get this broadcast too, not just the lobby update above. Lives here
-  // (not in handleRoomLeave) so a dropped connection (crash, socket 'close'
-  // in handlers.js) gets it exactly like an explicit leave does - it used to
+  // get this broadcast too, not just the lobby update. Lives here (not in
+  // handleRoomLeave) so a dropped connection (crash, socket 'close' in
+  // handlers.js) gets it exactly like an explicit leave does - it used to
   // only fire for the explicit RoomLeave packet, leaving a "ghost" player
   // for anyone whose room-mate crashed instead of leaving normally.
   if (room.players.size > 0) {
@@ -427,10 +456,28 @@ function removeFromRoom(db, u) {
   return room;
 }
 
+// Split out of removeFromRoom so callers can send their own reply to the
+// leaver (when there is one) before the lobby finds out - see
+// removeFromRoom's comment for why the order matters.
+function notifyLobbyAfterLeave(room) {
+  if (room.players.size === 0) sendRoomDeleteToLobby(room.channel, room.id);
+  else sendRoomUpdateToLobby(room, true);
+}
+
 // Ported from Game/Handlers/RoomLeave.cs + Packets/RoomLeave.cs. The
 // broadcast to remaining room members (Room.Remove's second Send) now lives
 // in removeFromRoom itself, shared with the disconnect path - this only
-// still owns the reply to the leaver's own socket.
+// still owns the reply to the leaver's own socket, sent before the lobby
+// update (notifyLobbyAfterLeave) to match the reference's packet order.
+//
+// Also pushes the leaver a fresh full room-list page (same call
+// handleChannelSelection already makes on first entering the lobby) -
+// found live that the incremental ROOM_LIST_UPDATE broadcast alone doesn't
+// make a room reappear in the real client's list after returning from one:
+// the room stayed invisible until manually paging the list, which sends a
+// real RoomList request/response round-trip. Not in the reference (its
+// RoomLeave.cs only refreshes the leaver's *user* list, not the room list),
+// but real client behavior wins.
 function handleRoomLeave(socket, db) {
   const u = socket.user;
   if (!u || u.roomId === null) return;
@@ -441,6 +488,8 @@ function handleRoomLeave(socket, db) {
   const room = removeFromRoom(db, u);
   const fields = [1, u.sessionId, oldSlot, room ? room.players.size : 0, room ? room.master : 0, u.xp, u.money];
   socket.sendPacket(ROOM_LEAVE, fields);
+  if (room) notifyLobbyAfterLeave(room);
+  sendRoomList(socket, u.roomListPage || 0);
 }
 
 // Ported from Game/Handlers/ChangeChannel.cs' RoomList half.
@@ -603,6 +652,7 @@ module.exports = {
   findFreeSlot,
   createClanWarRoom,
   removeFromRoom,
+  notifyLobbyAfterLeave,
   ROOM_CREATION,
   ROOM_JOIN,
   ROOM_LEAVE,

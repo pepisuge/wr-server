@@ -1,5 +1,5 @@
 const { users } = require('./state');
-const { handleRoomCreation, handleRoomJoin, handleRoomLeave, handleRoomListRequest, handleRoomKick, handleRoomInvite, removeFromRoom, sendRoomList, ROOM_CREATION, ROOM_JOIN, ROOM_LEAVE, ROOM_KICK, ROOM_INVITE, ROOM_LIST } = require('./rooms');
+const { handleRoomCreation, handleRoomJoin, handleRoomLeave, handleRoomListRequest, handleRoomKick, handleRoomInvite, removeFromRoom, notifyLobbyAfterLeave, sendRoomList, ROOM_CREATION, ROOM_JOIN, ROOM_LEAVE, ROOM_KICK, ROOM_INVITE, ROOM_LIST } = require('./rooms');
 const { handleChat, CHAT } = require('./chat');
 const { handleGamePacket, GAME_PACKET, handleScoreboardRequest, SCOREBOARD } = require('./gamesubs');
 const { handleExplosivesPacket, EXPLOSIVES } = require('./explosive');
@@ -168,7 +168,8 @@ function createHandlers(db) {
     users.set(sessionId, socket.user);
     announceJoin();
     socket.on('close', () => {
-      removeFromRoom(db, socket.user); // a dropped connection must clean up a room the same way an explicit leave does
+      const room = removeFromRoom(db, socket.user); // a dropped connection must clean up a room the same way an explicit leave does
+      if (room) notifyLobbyAfterLeave(room);
       users.delete(sessionId);
       announceLeave();
     });
