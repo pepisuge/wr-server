@@ -64,10 +64,10 @@ function roomInfoFields(room) {
 
 // The per-player roster block (Game/Packets/RoomPlayers.cs) - what tells the
 // client who else is in the room and lets it render team/ready state.
-// ponytail: class/IP:port are still placeholders (0, or "not connected") -
-// we don't track player class or the UDP endpoint per player yet.
-// health/kills/deaths/weapon are real now (see gamesubs.js's PlayerDamage/
-// WeaponSwitch).
+// ponytail: IP:port is still a placeholder ("not connected") - we don't
+// track the UDP endpoint per player. health/kills/deaths/weapon/class are
+// real (weapon/class set by gamesubs.js's WeaponSwitch/Spawn) - class stays
+// 0 (Engineer) until the player's first spawn, same as the reference.
 function roomPlayerFields(player) {
   const u = users.get(player.sessionId);
   const clan = u ? clanInfo(u) : null;
@@ -79,8 +79,8 @@ function roomPlayerFields(player) {
     player.team,
     player.weapon ?? 0,
     0,
-    0, // class
-    player.health ?? 100,
+    player.class ?? 0,
+    player.health ?? 1000,
     player.displayname,
     ...(clan ? [clan.id, clan.name, clan.rank] : [-1, -1, -1]),
     1,
@@ -196,7 +196,7 @@ function handleRoomCreation(socket, pkt) {
           slot: 0,
           team: 0,
           ready: true,
-          health: 100,
+          health: 1000,
           alive: true,
           kills: 0,
           deaths: 0,
@@ -253,7 +253,7 @@ function createClanWarRoom(challenger, opponentClanId) {
           slot: 0,
           team: 0,
           ready: true,
-          health: 100,
+          health: 1000,
           alive: true,
           kills: 0,
           deaths: 0,
@@ -344,7 +344,7 @@ function handleRoomJoin(socket, pkt) {
     slot,
     team,
     ready: false,
-    health: 100,
+    health: 1000,
     alive: true,
     kills: 0,
     deaths: 0,

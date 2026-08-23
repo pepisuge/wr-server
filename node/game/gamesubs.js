@@ -1,11 +1,12 @@
 const { broadcastPacket } = require('../lib/xor-socket');
 const { XOR } = require('../lib/constants');
 const { getChannel, users } = require('./state');
-const { sendRoomUpdateToLobby, sendRoomPlayers, findFreeSlot } = require('./rooms');
+const { sendRoomUpdateToLobby, findFreeSlot } = require('./rooms');
 const { startRoundTimer, checkWinCondition, endRound, scoreboardValues } = require('./roundtimer');
 const { getMap } = require('./maps');
 const { initExplosiveMatch } = require('./explosive');
 const { broadcastSystemMessage } = require('./chat');
+const { getItem } = require('./items');
 
 const GAME_PACKET = 0x7530;
 const SCOREBOARD = 0x7550;
@@ -130,7 +131,7 @@ function beginMatch(room, db) {
   const players = [...room.players.values()];
   // Fresh round: clear last round's health/kills/deaths (Player.Reset/RoundStart).
   for (const p of players) {
-    p.health = 100;
+    p.health = 1000;
     p.alive = true;
     p.kills = 0;
     p.deaths = 0;
@@ -389,8 +390,13 @@ function applySpawnTestOverrides(room, player, fields) {
 function handleSpawn(room, player, payload) {
   if (room.state !== 2) return null;
   clearAutoRespawn(player); // the client made it here on its own, no need for the safety net
-  player.health = 100; // covers first spawn and every respawn after a death
+  player.health = 1000; // covers first spawn and every respawn after a death - Entities/Player.cs's Health=1000, not 100 (confirmed in both references, not Explosive-specific)
   player.alive = true;
+  // Spawn.cs's GetByte(3): the class the client just spawned as (Engineer=0,
+  // Medic=1, Sniper=2, Assault=3, Heavy=4). Only used for the room roster's
+  // class field for now - a player who joins mid-match otherwise shows as
+  // Engineer to everyone until they spawn once.
+  player.class = Number(payload[3]) || 0;
   const out = padded(payload, 10);
   const slot = nextSpawnSlot(room);
   applySpawnTestOverrides(room, player, out);
@@ -409,29 +415,31 @@ function handleConfirmSpawn() {
 }
 
 // Ported from Objects/GameMode.cs's OnDamage/DamagePlayer, simplified.
-// ponytail: flat damage per hit instead of the reference's real formula
-// (weapon Power/PowerPersonal x hitbox multiplier, from GetHitBoxMultiplier
-// + DamageCalculator) - our item catalog doesn't carry those stats yet.
-// Upgrade once the item catalog has weapon stats. Kills/deaths persist to
-// user_details immediately (fire-and-forget, same pattern as
-// checkPremiumExpiry).
+// Real per-weapon damage: `item_target_info.power` (DB table, confirmed
+// populated - e.g. DA02=200, DG05=850, DL01=2000) x a weapon-independent
+// hitbox multiplier (DB table `damage_multipliers`: head 1.5, torso 0.75,
+// lower limbs 0.33, sniper-zone 1.5 - GameMode.cs's GetHitBoxMultiplier).
+// Kills/deaths persist to user_details immediately (fire-and-forget, same
+// pattern as checkPremiumExpiry).
 //
-// The hitbox multipliers themselves ARE weapon-independent though (DB table
-// `damage_multipliers`: head 1.5, torso 0.75, lower limbs 0.33, sniper-zone
-// 1.5 - GameMode.cs's GetHitBoxMultiplier), so the 4 HSCalculation zones
-// (Enums/Hitbox.cs) can be ported in ratio against FLAT_DAMAGE (=torso, the
-// existing baseline) without the item catalog. Only the true head zone
-// (1237) counts as a real headshot (icon/stat) - the reference excludes
-// knives/rockets even on a head hit (`GameMode.cs`: weapon code not
-// DA/DJ/DK), and the sniper zone (1243) does the same x2 damage as a
-// headshot without being flagged as one at all.
-const FLAT_DAMAGE = 25; // torso baseline (HSCalculation 1239, x1.0)
-const HITBOX_DAMAGE = {
-  1237: FLAT_DAMAGE * 2, // head/neck, x1.5 absolute -> x2 relative to torso
-  1239: FLAT_DAMAGE, // torso/limbs
-  1241: Math.round(FLAT_DAMAGE * 0.44), // lower limbs, x0.33 absolute -> x0.44 relative
-  1243: FLAT_DAMAGE * 2, // sniper-only bone, same damage as a headshot but not one
+// ponytail: the reference also applies a distance-falloff tier
+// (Weapon.PowerPersonal, "Low/Middle/High") on top of this, but the 23-field
+// damage payload handled below has no distance/radius field to key it off
+// of - falls back to always using the closest tier (index 0), which is 100%
+// in every sampled row anyway, so this is equivalent to just using the raw
+// power. Upgrade if a distance field is ever identified in the payload.
+//
+// Only the true head zone (1237) counts as a real headshot (icon/stat) -
+// the reference excludes knives/rockets even on a head hit (`GameMode.cs`:
+// weapon code not DA/DJ/DK), and the sniper zone (1243) does the same x1.5
+// damage as a headshot without being flagged as one at all.
+const HITBOX_MULTIPLIER = {
+  1237: 1.5, // head/neck
+  1239: 0.75, // torso/limbs
+  1241: 0.33, // lower limbs
+  1243: 1.5, // sniper-only bone, same multiplier as a headshot but not one
 };
+const FALLBACK_POWER = 25; // unknown/uncatalogued weapon code - old flat baseline
 const NO_HEADSHOT_WEAPON = /^(DA|DJ|DK)/; // knives, rockets - never credited as a headshot
 
 function handlePlayerDamage(room, player, payload, u, db) {
@@ -456,7 +464,8 @@ function handlePlayerDamage(room, player, payload, u, db) {
   const hsCalc = Number(payload[11]) - u.sessionId;
   const weapon = String(payload[22] || '');
   const headshot = hsCalc === 1237 && !NO_HEADSHOT_WEAPON.test(weapon);
-  const damage = HITBOX_DAMAGE[hsCalc] ?? FLAT_DAMAGE;
+  const basePower = getItem(weapon)?.power || FALLBACK_POWER;
+  const damage = Math.round(basePower * (HITBOX_MULTIPLIER[hsCalc] ?? 0.75));
 
   const previousHealth = victim.health;
   victim.health = Math.max(0, victim.health - damage);
@@ -483,10 +492,6 @@ function handlePlayerDamage(room, player, payload, u, db) {
     db.query('UPDATE user_details SET deaths = deaths + 1, kills = GREATEST(0, CAST(kills AS SIGNED) - 1) WHERE id = ?', [
       player.userId,
     ]).catch((err) => console.error('PlayerDamage: failed to persist friendly-fire penalty:', err.message));
-    sendRoomPlayers(
-      [...room.players.keys()].map((sid) => users.get(sid)?.socket).filter(Boolean),
-      [player]
-    );
     return { newType: SUB.PLAYER_DEATH, payload: out };
   }
 
@@ -503,14 +508,6 @@ function handlePlayerDamage(room, player, payload, u, db) {
       console.error('PlayerDamage: failed to persist headshot:', err.message)
     );
   }
-  // The room roster (PLAYER_INFO) only ever went out once, at join time -
-  // kills/deaths kept changing in our own state but the client's in-match
-  // scoreboard never heard about it. Push both rows whenever they change.
-  sendRoomPlayers(
-    [...room.players.keys()].map((sid) => users.get(sid)?.socket).filter(Boolean),
-    [player, victim]
-  );
-
   // TeamDeathMatch.OnDeath: a normal kill drains the *victim's own team*
   // ticket pool, not the attacker's. ponytail: unconditional now, not just
   // TDM - ToXiiC-Core's OnDie() decrements this for every mode (User.cs),
@@ -572,7 +569,7 @@ function scheduleAutoRespawn(room, player) {
     // case) they may have already respawned on their own.
     if (room.state !== 2 || player.alive || !room.players.has(player.sessionId)) return;
 
-    player.health = 100;
+    player.health = 1000;
     player.alive = true;
     // TDM never sends an explicit Spawn request after the first one of the
     // match in practice - every respawn observed live went through this

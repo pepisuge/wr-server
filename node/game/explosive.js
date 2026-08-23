@@ -58,14 +58,12 @@ function prepareRound(room, first) {
 
   if (![...room.players.values()].every((p) => !p.roundWait)) return false;
 
-  // ponytail/declared deviation: the reference sets Health=1000 for
-  // Explosive specifically (Player.RoundStart()'s mode-specific override).
-  // Kept at the same 100/FLAT_DAMAGE=25 convention FFA/TDM already use
-  // instead, to avoid re-deriving a whole new damage scale for one mode -
-  // upgrade if real capture shows Explosive fights lasting meaningfully
-  // longer than FFA/TDM ones do.
+  // Entities/Player.cs's RoundStart(): Health=1000. Confirmed NOT an
+  // Explosive-only override (was assumed so here until a live test with
+  // real per-weapon damage exposed near-one-shot pistol kills) - both
+  // references set 1000 as the universal baseline for every mode.
   for (const p of room.players.values()) {
-    p.health = 100;
+    p.health = 1000;
     p.alive = true;
   }
   room.upTick = 0;

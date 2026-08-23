@@ -9,7 +9,7 @@ const SLOTS = 8;
 // the starting loadout every class begins with.
 const DEFAULT_ITEMS = new Set(['DA02', 'DB01', 'DF01', 'DG05', 'DC02', 'DJ01', 'DR01', 'DQ01', 'DN01', 'DL01']);
 
-const ITEMS = new Map(); // code -> { code, active, name, isWeapon, buyable, reqLevel, reqPremium, cost[5], slots[5][8], canEquip6th }
+const ITEMS = new Map(); // code -> { code, active, name, isWeapon, buyable, reqLevel, reqPremium, cost[5], power, slots[5][8], canEquip6th }
 
 function parseCsvNumbers(csv) {
   return String(csv || '')
@@ -34,6 +34,7 @@ function toItem(row) {
     reqLevel: row.req_level == null ? 1 : Number(row.req_level),
     reqPremium: !!row.req_premium,
     cost: parseCsvNumbers(row.cost),
+    power: Number(row.power) || 0,
     slots,
     // Weapon.cs's CanEquip6Th: true if ANY class can equip this weapon in
     // slot index 5 (the 6th slot) - derived from the same matrix, no extra
@@ -46,10 +47,12 @@ async function loadItems(db) {
   const [weapons] = await db.query(`
     SELECT w.code, w.active, w.name, 1 AS is_weapon,
            s.buyable, s.req_level, s.req_premium, s.cost,
-           e.class1, e.class2, e.class3, e.class4, e.class5
+           e.class1, e.class2, e.class3, e.class4, e.class5,
+           t.power
     FROM item_weapons w
     LEFT JOIN item_shop s ON s.code = w.code
     LEFT JOIN item_equipment e ON e.code = w.code
+    LEFT JOIN item_target_info t ON t.code = w.code
   `);
   const [extras] = await db.query(`
     SELECT x.code, x.active, x.name, 0 AS is_weapon,
