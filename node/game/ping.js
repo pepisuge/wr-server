@@ -9,6 +9,9 @@ const PING = 0x6400;
 const CHAT = 0x7400;
 const NOTICE = 1; // Game/Enums/ChatType.cs Notice1 - see gm.js for why this is the "system message" type
 const INTERVAL_MS = 5000;
+// Non invasivo: 4 ping mancati (20s) prima di considerare la connessione
+// morta - assorbe un lag/freeze temporaneo del client senza scollegarlo.
+const PONG_TIMEOUT_MS = INTERVAL_MS * 4;
 
 function premiumTimeLeft(u) {
   if (!u.premium || !u.premiumExpireDate) return -1;
@@ -16,12 +19,26 @@ function premiumTimeLeft(u) {
   return left > 0 ? left : -1;
 }
 
-// ponytail: no round-trip tracking (the reference's pingOk lock + client
-// reply handler) - just push on a timer. Add real RTT if the client ever
-// needs it for something beyond display.
+// The client already replies to every Ping with its own PING-id packet
+// (visto nei log: `id=25600` in ingresso) - prima veniva scartato come
+// pacchetto sconosciuto. Registrata in handlers.js's dispatch map.
+function handlePingReply(socket) {
+  if (socket.user) socket.user.lastPong = Date.now();
+}
+
+// ponytail: no real RTT tracking (the reference's pingOk lock) - just a
+// liveness timestamp, enough to catch a connection that never fires the
+// socket 'close'/'error' event on its own (cable pulled, NAT silently
+// dropped it). Add real RTT if the client ever needs it for something
+// beyond display.
 function startPingLoop(db) {
   setInterval(() => {
+    const now = Date.now();
     for (const u of users.values()) {
+      if (now - u.lastPong > PONG_TIMEOUT_MS) {
+        u.socket.destroy(); // triggers the existing 'close' handler cleanup (handlers.js)
+        continue;
+      }
       // Same spot the reference calls UpdatePremiumState() - right before
       // building the Ping packet. Notify-only (per the user's own choice):
       // no forced reconnect, so the 5th-slot display can stay stale until
@@ -35,4 +52,4 @@ function startPingLoop(db) {
   }, INTERVAL_MS);
 }
 
-module.exports = { startPingLoop, PING };
+module.exports = { startPingLoop, handlePingReply, PING };

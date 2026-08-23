@@ -1,0 +1,924 @@
+# Protocollo WarRock — dalla connessione alla lobby
+
+Guida di riferimento a quello che abbiamo costruito e verificato contro il client reale nelle Fasi 1-3 del porting Node.js. Ogni sezione ha: il concetto, il pacchetto reale catturato dai nostri log, e — dove è successo — il bug che abbiamo trovato e come l'abbiamo diagnosticato.
+
+## 0. Architettura: perché due processi
+
+```mermaid
+flowchart LR
+    C[Client WarRock] -- "5330 login" --> A[Authorization\nlogin/master]
+    C -- "5340 gioco\n5350/5351 UDP" --> G[Game\nmondo di gioco]
+    A <-- "5012 canale interno\nregistrazione + validazione sessioni" --> G
+    A --- DBA[(masterserver)]
+    G --- DBG[(wres2)]
+```
+
+`Authorization` è il "centralino": autentica l'account, e tiene la lista dei `Game` server disponibili. `Game` è dove si gioca davvero. Sono processi separati perché nel 2008, un publisher poteva avere **un solo** Authorization server ma **molti** Game server (uno per regione/lingua) — il client fa login una volta, poi sceglie a quale mondo entrare. Il canale sulla porta 5012 è come i due processi si parlano *tra loro*, invisibile al client.
+
+Questo spiega anche perché un login riuscito **non basta**: dopo aver scelto un server dalla lista, il client apre una **connessione TCP completamente nuova** verso il Game server (porta 5340) e deve autenticarsi *di nuovo* lì, usando un `SessionID` che l'Authorization server gli ha dato come "lasciapassare" temporaneo.
+
+## 1. Il pacchetto di base: testo + XOR
+
+Ogni pacchetto, prima di essere cifrato, è una stringa di testo semplice, separata da spazi:
+
+```
+<tick> <id> <campo1> <campo2> ... \n
+```
+
+`tick` è un timestamp locale del mittente (non validato da nessuno), `id` è un numero che identifica il tipo di pacchetto (es. `24832` = "voglio l'ora del server"), il resto sono i dati.
+
+**"Cifratura"**: ogni byte della stringa viene messo in XOR con **una singola chiave fissa**. Non è crittografia vera — con la chiave nota si legge tutto in chiaro. Il bello dell'XOR è che è la sua stessa inversa: `byte ^ chiave ^ chiave = byte`, quindi la stessa funzione cifra e decifra.
+
+Esempio reale, dal nostro primo test (`fake-client.js` che manda `hello world`):
+
+| carattere | byte (hex) | chiave client→server | byte sul cavo |
+|---|---|---|---|
+| `h` | `0x68` | `0xC3` | `0x68 ^ 0xC3 = 0xAB` |
+
+Chi cattura il traffico con Wireshark vede `0xAB`, non `h` — ma conoscendo la chiave (`0xC3`), un XOR e torna in chiaro.
+
+**Chiavi usate**, da `Core/Constants.cs`:
+
+| canale | server → client | client → server |
+|---|---|---|
+| esterno (login, gioco) | `0x96` | `0xC3` |
+| interno (Auth ↔ Game) | `0x23` (lato Auth) | `0xA3` (lato Game) |
+
+**Framing**: TCP non sa cos'è un "pacchetto", consegna solo un flusso di byte. Il separatore è il byte `0x0A` (newline) — il server accumula byte finché non ne trova uno, poi quello è un pacchetto completo. Importante: si **decifra prima**, poi si cerca `0x0A` nel testo in chiaro (il byte `0x0A` cifrato non sarebbe più `0x0A`).
+
+## 2. Canale interno: il Game server si registra
+
+Appena connesso alla porta 5012, l'Authorization server manda per primo un pacchetto "saluto" (`Connection`, id `4608`). Il Game server risponde registrandosi:
+
+```mermaid
+sequenceDiagram
+    participant G as Game server
+    participant A as Authorization
+    G->>A: connette a :5012
+    A->>G: Connection (id 4608) [nonce, 77]
+    G->>A: Authorization (id 4096) [1, chiave, "Spain ", ip, porta, tipo]
+    A->>G: Authorize (id 4096) [1, serverId]
+```
+
+Catturato dai log reali:
+
+```
+OUT id=4096 fields=[1, AlterEmuV5.0.1, Spain , 127.0.0.1, 5340, 0]
+Internal: registered game server "Spain" as id 1
+OUT id=4096 fields=[1, 1]
+```
+
+Da qui in poi, l'Authorization server sa che esiste un server "Spain", raggiungibile su `127.0.0.1:5340`, e lo include nella lista che manderà ai giocatori che fanno login.
+
+> **Nota:** il nome viene mandato con uno spazio finale (`"Spain "`) — commento originale nel C#: serve a separarlo visivamente da qualcos'altro nel client. Rimosso per errore in un primo momento con un `.trim()`, poi verificato che in realtà non cambiava nulla (lo spazio, una volta passato dentro l'escaping dei pacchetti, non è più un carattere "spazio" vero e proprio — vedi più sotto).
+
+## 3. Login: patch-check, poi username/password
+
+Prima ancora di autenticarsi, il launcher chiede "sono aggiornato?":
+
+```
+IN  id=4112 (Launcher / patch-check), nessun campo
+OUT id=4112 fields=[0, 0, 0, 0, 0, 0, http://]
+```
+
+Rispondere sempre versione `0` in ogni campo fa sì che il client (che ha una versione reale più alta) concluda "sono già aggiornato" e proceda — un trucco pigro ma efficace del server originale.
+
+Poi il vero login:
+
+```
+IN  id=4352 (login) blocks=[1335749171, 0, wruser, password123, 0, 0]
+OUT id=4352 (ServerList) blocks=[1, 100, 0, wruser, NULL, WRUser, 24693, 1, 0, 1, 1, 1, Spain, 127.0.0.1, 5340, 0, 0, -1,-1,-1,-1, 0, 0]
+```
+
+`blocks[2]` e `blocks[3]` sono username e password — non per struttura del protocollo (potevano essere ovunque), ma perché è lì che il riferimento C# li leggeva, e la cattura reale l'ha confermato al primo tentativo. La password non viaggia in chiaro nel database: è salvata come `SHA256(password + salt)`, e il salt è pubblico nel DB — serve solo a far sì che due utenti con la stessa password non abbiano lo stesso hash.
+
+### 🐛 Bug trovato: un campo di troppo sfasa tutto
+
+Il riferimento C# manda anche un campo "versione" (`1.11025`) prima del conteggio server. Includendolo, il client mostrava il server come **"pieno"**, con un nome a caso al posto di "Spain". Non un errore di validazione — un disallineamento posizionale: il protocollo non è auto-descrittivo, ogni campo è letto "alla cieca" in base alla sua posizione. Un campo extra sposta *tutti* quelli dopo di una posizione: il nome del server legge quello che doveva essere l'ID, il conteggio giocatori legge quella che doveva essere la porta (`5340`, enorme per un contatore di giocatori → "pieno"). **Diagnosi**: abbiamo chiesto "che nome vedi nella riga?" — la risposta ("qualcosa di strano, non 'Spain'") ha confermato lo sfasamento prima ancora di guardare altro.
+
+## 4. Connessione al Game server
+
+Il client, scelto il server, apre una *nuova* connessione TCP a `:5340` e ripete l'autenticazione, stavolta in due passi:
+
+```mermaid
+sequenceDiagram
+    participant Cl as Client
+    participant G as Game server
+    Cl->>G: connette a :5340
+    G->>Cl: Connection (id 4608) [nonce, 77]
+    Cl->>G: ServerTime? (id 24832) [checksum, 3, MAC address]
+    G->>Cl: ServerTime (id 24832) [1, "ss/mm/HH/dd/mese/anno/settimana/giornoAnno/0"]
+    Cl->>G: Authorization (id 25088) [userId, -1, user, nick, sessionId, ...]
+    G->>Cl: Authorization (id 25088) [1, dati account/inventario...]
+```
+
+Il primo scambio (`ServerTime`, id `24832`) è in realtà un controllo anti-cheat/anti-ban: il client manda `versionId=3` (fisso) e il proprio **indirizzo MAC** (12 caratteri esadecimali), il server lo confronta con una tabella `macaddress_blacklist`. Se pulito, risponde con l'ora corrente in un formato a campi slash-separati.
+
+Poi il vero `Authorization` (id `25088`, **diverso** dal login: qui gira sulla porta di gioco, non su quella di login) — il client manda di nuovo `sessionId` (quello ricevuto al login) per dimostrare "sono davvero io". Il server risponde con un pacchetto enorme: account, clan, livello, inventario, equipaggiamento — per un account nuovo, valori "vuoti" (`F,F,F,F` = 4 slot inventario disattivati, `^` = nessun oggetto).
+
+### 🐛 Bug trovato: intero con segno vs senza segno
+
+Il `SessionID` lo generavamo come numero casuale fino a ~268 milioni. Il client lo salva e lo rimanda indietro come **intero a 16 bit con segno** (`short`, range -32768..32767). Un valore come `39574` (che sta in 16 bit *senza* segno) torna interpretato come `39574 - 65536 = -25962`. Risultato: la nostra validazione `sessionId > 0` falliva sempre, e il client mostrava "errore 73030". **Lezione**: quando un protocollo non dichiara i tipi, ogni "intero" nasconde un range implicito — va dedotto dal comportamento osservato, non assunto.
+
+## 5. UDP: un protocollo completamente diverso
+
+Fin qui, tutto testo + XOR su TCP. UDP è tutt'altra cosa: **binario**, a offset fissi, big-endian (l'ordine "di rete" — il byte più significativo per primo). Serve per i dati in tempo reale (movimento, spari) dove perdere occasionalmente un pacchetto è accettabile, ma aspettare una ritrasmissione TCP no.
+
+> Non è un protocollo standard (non è STUN, non è nulla di documentato) — è un formato binario inventato dai dev di WarRock. Per fare pratica a leggerlo byte per byte, con il pacchetto reale che abbiamo catturato: **[WarRock Dissector](https://claude.ai/code/artifact/7cd96003-9d50-4ccb-bc9e-800f5a47648c)**.
+
+Il client apre lo scambio UDP con un pacchetto "Initial":
+
+```
+10 01 01 00 7a 4f 00 00 00 00 00 00 00 64
+└─type─┘  └sessionId┘
+0x1001            0x7a4f = 31311
+```
+
+`0x7a4f` = **31311**, esattamente il `SessionID` di quella sessione — il client sta dicendo "questo flusso UDP appartiene a questa sessione TCP". Il server risponde con lo **stesso pacchetto**, ma riscrive i byte 4-5 con "porta+1" (5350+1=5351): "usa l'altra porta UDP per il prossimo passo".
+
+Poi arriva un pacchetto "Ping" (`type=0x1010`), che scambia indirizzo IP:porta locale e remoto (utile dietro NAT, per scoprire il proprio IP pubblico) — cifrati con le **stesse chiavi XOR** del canale esterno (`0xC3`/`0x96`), ma applicate solo a 6 byte alla volta, non a tutto il pacchetto.
+
+## 6. Lobby: canale, stanze, utenti
+
+Ultimo passo delle Fasi 1-3: il client sceglie una modalità/canale (CQC, Urban Ops, ecc.) e il server risponde con conferma + lista stanze (vuota) + lista utenti (solo se stesso):
+
+```
+IN  id=28673 (ChannelSelection) blocks=[1]
+OUT id=28673 fields=[1, 1]
+OUT id=29184 (RoomList) fields=[0, 0, 0]     ← 0 stanze, pagina 0
+```
+
+Da qui il client mostra la lobby vuota — obiettivo delle Fasi 1-3 raggiunto.
+
+## 7. Stanze e chat: serve un registro condiviso
+
+Fin qui ogni connessione viveva per conto suo — un socket, un utente, nessun bisogno di sapere degli altri. Le stanze rompono questo isolamento: se crei una stanza, *un altro* utente collegato deve vederla comparire nella sua lobby senza fare nulla. Questo richiede per la prima volta uno stato **condiviso** tra le connessioni — un piccolo registro in memoria (`game/state.js`) con chi è connesso, in che canale, in che stanza.
+
+**Creazione stanza** (`RoomCreation`, id `29440`):
+
+```
+IN  blocks=[OneShot,OneKill, 0, NULL, 1, 12, 3, 0, 0]
+OUT fields=[1, 0, 1, 1, 1, 0, OneShot,OneKill, 0, 16, 1, 1, 0, 2, 0, 2, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 2, -1]
+```
+
+Stesso pattern posizionale già visto: `blocks[0]` è il nome, `blocks[3]` è un "indice" di capienza massima (non il numero diretto — per il canale CQC, indice `1` → `8×(1+1)=16` giocatori, la formula è nel codice originale). La risposta rispecchia lo stesso blocco di 25 campi usato anche da `RoomList`, `RoomJoin` e `RoomUpdate` — un solo formato "descrizione stanza" riusato ovunque.
+
+### 🐛 Bug trovato: un ID di sessione dove doveva starci uno slot
+
+Il campo "master" di una stanza è pensato per essere un piccolo **indice di slot** (0, 1, 2...), non un identificativo di sessione. Il codice iniziale ci metteva per errore il `SessionID` intero (es. `29562`) — invisibile finché non si guarda il pacchetto `RoomLeave` byte per byte e si nota un numero enorme dove ci si aspettava uno 0 o un 1. Corretto usando sempre `0` (non tracciamo ancora slot/team reali, quindi non c'è un "vero" master da calcolare).
+
+**Chat** (`Chat`, id `29696`) — il campo messaggio ha un formato particolare: il client lo manda come `"WRUser>>ciao"`, dove `>>` separa un prefisso (probabilmente il proprio nickname, aggiunto dal client) dal testo vero. Se nel messaggio originale c'erano spazi, sono già stati sostituiti con il carattere `0x1D` (lo stesso escaping visto nella Fase 1 per tutti i campi testo) — per leggerlo va prima isolato il testo dopo il marcatore, poi rimesso lo spazio al posto di `0x1D`.
+
+Testato: creazione stanza, chat visibile nel client, uscita dalla stanza — tutto verificato con il client reale.
+
+### Serve un secondo giocatore per testare davvero
+
+Il gioco non permette di lanciare due istanze del client sullo stesso PC. Per verificare che due utenti si vedano a vicenda (stanza che appare senza refresh, chat ricevuta), abbiamo scritto un **client finto** (`node/tools/fake-client.js`): uno script che fa l'intero login+autenticazione vero (stesse funzioni di codifica del server) e si presenta al server esattamente come un secondo giocatore, pilotabile da terminale. Non è un mock — è un client reale dal punto di vista del protocollo, solo senza interfaccia grafica.
+
+### 🐛 Bug trovato: nessun riutilizzo degli ID stanza
+
+Prima creazione stanza → id `1`. La si distrugge uscendo. Nuova stanza creata → invece di riprendere l'id `1` libero, il contatore continuava semplicemente a salire (id `2`), lasciando un "buco" nella lista — visibile nel client come una stanza che compare nella *seconda* posizione invece che nella prima. Era una semplificazione dichiarata fin dall'inizio ("niente riutilizzo ID, aggiungilo se serve") — è bastato il primo test con due sessioni reali per farla emergere concretamente. Corretto cercando sempre il più piccolo id libero, invece di un contatore che sale e basta.
+
+### Non-bug: l'altro giocatore non compare nella lista utenti
+
+Controllando il codice C# di riferimento (`Game/Entities/User.cs`, `SetChannel`): quando un giocatore entra in un canale, il server **non notifica nessun altro** — manda solo a lui stesso la lista stanze. Nessun aggiornamento automatico della lista utenti esiste nemmeno nell'originale (l'id `28944`, nominato nei file di riferimento come "aggiornamento lista utenti", non è mai implementato in nessun handler). Quindi se il tuo compagno di test non compare, non è un difetto della nostra porting — probabilmente il client la richiede di nuovo solo in certe azioni dell'interfaccia (es. aprire una scheda specifica).
+
+## Fuori scope, per ora
+
+Durante il test è arrivato anche un pacchetto `id=30000` (`GamePacket`) da un tentativo di cambiare squadra — non gestito allora. È il contenitore generico per tutte le azioni *dentro* una partita (cambio team, pronti/non pronti, mappa, ecc.), smistato nel C# a decine di sotto-handler (`GameSubs`). Implementato nella fase successiva.
+
+## 8. Flusso di partita: un contenitore, tanti sotto-pacchetti
+
+Tutte le azioni dentro una stanza (cambio squadra, "pronto", impostazioni, avvio) viaggiano dentro **un solo id di pacchetto** (`GamePacket`, `30000`), con un'intestazione fissa di 4 campi seguita da un payload specifico:
+
+```
+[slot mittente, id stanza, campo non identificato, sotto-tipo, ...payload]
+```
+
+Es. cambio squadra reale catturato: `[1, 1, 2, 56, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0]` → slot `1`, stanza `1`, sotto-tipo `56` (SideUpdate), payload `[1,0,1,0,0,0,0,0,0,0]` dove la posizione `[2]` del payload (`1`) è la squadra richiesta. La risposta ha la stessa forma e viene trasmessa a tutta la stanza.
+
+### 🐛 Bug trovato: la squadra è codificata nello slot, non in un campo a parte
+
+Il primo tentativo di cambio squadra sembrava non fare nulla. Il motivo, trovato leggendo `Room.SwitchSide` nel C# originale: **ogni stanza divide i suoi slot a metà** — la metà bassa (0-7 su 16 posti) è squadra 0, la metà alta (8-15) è squadra 1. La squadra di un giocatore non è un dato indipendente: il client la deduce dal *numero di slot* che gli è stato assegnato. Noi assegnavamo gli slot in ordine sequenziale (0, 1, 2...) ignorando la squadra — quindi dicevamo internamente "sei in squadra 1" ma gli davamo uno slot della metà bassa, che il client legge come squadra 0. Risultato: il client mostrava una squadra, il server ne teneva un'altra a mente, e ogni tentativo di "andare in squadra 1" falliva silenziosamente perché per il server ci si era già.
+
+Fix: quando un giocatore entra o cambia squadra, lo slot va cercato nel range corretto (metà bassa o alta) in base alla squadra di destinazione — non assegnato a caso.
+
+### 🐛 Bug trovato: l'intestazione del pacchetto va scritta *prima* di applicare la modifica
+
+Cambiare squadra sposta anche lo slot del giocatore. La domanda è: l'intestazione di risposta (`slot mittente`) deve riportare lo slot **vecchio** o quello **nuovo**? Il codice C# risponde chiaramente: lo slot nell'intestazione viene letto *all'arrivo* del pacchetto, prima di eseguire l'azione — quindi è sempre il valore precedente. Lo slot nuovo compare solo dentro il payload (un campo specifico del sotto-pacchetto `SideUpdate`). Il nostro codice inizialmente costruiva l'intestazione *dopo* aver già spostato il giocatore, mandando quindi due volte lo stesso valore (nuovo slot sia in testa che nel payload) — il client, non trovando più nessuno nella riga "vecchia" da aggiornare, mostrava un pannello vuoto.
+
+## 9. Avviare davvero una partita: equipaggiamento e game loop
+
+Dopo "Start", il client mostra la schermata di selezione personaggio/armi — un pacchetto completamente diverso da tutto il resto (`Equipment`, id `29970`, non passa dal contenitore `GamePacket`). Poi manda `ConfirmSpawn` (100) e... si ferma. Nessun `Spawn` (150) in arrivo.
+
+### 🐛 Bug trovato: senza battito, il client non parte mai
+
+La causa: il client aspetta il **battito del server** prima di considerare la partita "davvero iniziata". Quel battito è `GameTick` (id `30016`), un pacchetto mandato una volta al secondo con due contatori — il primo, commentato **"Spawn Counter"** nel codice originale, è esattamente il timer di spawn che appariva fermo a zero. Senza quel pacchetto, il client resta in attesa indefinitamente: non manda mai `Spawn` da solo, quindi lo "spawn on demand" che avevamo già implementato non veniva mai nemmeno invocato.
+
+Fix: un ciclo che, mentre la stanza è in stato "Playing", manda `GameTick` ogni secondo (contatore su/giù, punteggio a zero — non teniamo ancora il punteggio reale). Appena il client riceve il primo tick, manda da solo `Spawn` — che gestivamo già dalla fase precedente. Nessun trigger di spawn dal server necessario: bastava far vedere al client che il tempo stava scorrendo.
+
+```
+OUT(broadcast x2) id=30016 fields=[20000, 3580000, 0, 0, 0, 0, 2, 0, 30]   ← battito
+Game IN  id=30000 blocks=[..., 150, ...]                                    ← il client chiede di spawnare, finalmente
+OUT(broadcast x2) id=30000 fields=[1, 0, 1, 2, 150, ...]                    ← confermato, sei in gioco
+```
+
+Questo è il confine di quello che il progetto di riferimento aveva davvero completato (fino alla Fase 20): il vero ciclo di gioco (danni, morte, veicoli, condizioni di vittoria) esiste nel C# come codice ma con calcoli di danno, hitbox, e un intero sistema di armi/veicoli reale — territorio nuovo, non più solo lettura di un protocollo già mappato. Il danno/morte/respawn è stato affrontato nella Fase 21.
+
+## 10. Movimento e sparo: il server fa il postino, non il fisico
+
+Ultima scoperta, e la più sorprendente. Ci si aspetterebbe che il server debba capire i pacchetti di movimento/sparo (dove sei, dove miri) per validarli o farne qualcosa. Leggendo fino in fondo `UDPListener.cs`, invece:
+
+Tutto il traffico di gioco in tempo reale viaggia sotto lo stesso `type=0x1010` già visto per il ping — ma con un **byte di sotto-comando** all'offset 14 (`0x10`, `0x30`, `0x31`, `0x32`, `0x34`, uno per tipo di azione: movimento, salto, mira, ecc. — mai completamente mappati nemmeno nel codice originale, c'è un commento dello sviluppatore che dice letteralmente "non sono sicuro di dove si trovino"). Il server:
+
+1. Legge solo tre cose dal pacchetto: chi lo manda (`sessionId`, offset 4-5), in che stanza (offset 6-7), e a chi è diretto (`targetId`, offset 22-23).
+2. Verifica che mittente e destinatario siano nella stessa stanza, e che la stanza sia in stato "Playing".
+3. Se tutto torna, inoltra il pacchetto **byte per byte, invariato**, all'indirizzo UDP pubblico del destinatario (quello imparato durante l'handshake Ping della Fase 1).
+
+Il contenuto — la posizione vera, l'angolo di mira — non viene mai decifrato dal server: viaggia direttamente da client a client, il server fa solo da centralino che sa "chi è dove". Questo è il motivo per cui bastava implementare il relay (poche righe) invece di simulare posizioni/fisica: il gioco è client-autoritativo per il movimento, il server valida solo "siete nella stessa partita?" prima di inoltrare.
+
+Verificato con il client vero che si muove e il client finto (esteso per completare anche l'handshake UDP) che riceve i pacchetti relayati in tempo reale, senza doverli interpretare.
+
+## 11. Decodificare il pacchetto di movimento (e il limite raggiunto)
+
+Dato che il server fa solo da postino per il movimento, per capirne il contenuto non serviva Wireshark: **il nostro stesso server è il punto di relay**, vede ogni pacchetto in chiaro prima di inoltrarlo — bastava stamparlo da lì.
+
+### Il campo XOR nascosto nel corpo del pacchetto
+
+I primi 29 byte (tipo, sessionId, stanza, sotto-comando, id destinatario) sono in chiaro — li leggevamo già. Il resto del pacchetto, però, mostrava lunghe sequenze del byte `c3` ripetuto — lo stesso valore usato come chiave XOR nell'handshake Ping. Un XOR ripetuto su un valore zero produce sempre la chiave stessa, quindi lunghe sequenze di `c3` sono quasi certamente byte "vuoti" cifrati, non dati reali. Decifrando il corpo con XOR `0xc3` (stessa chiave, direzione client→server) sono comparsi numeri in virgola mobile plausibili:
+
+| offset nel corpo | comportamento osservato | ipotesi (aggiornata in Fase 24) |
+|---|---|---|
+| 9 | 359.78 → 352.38 → 358.68 → 14.18 (salta da 359 a 14: un giro oltre lo zero) | angolo di mira (0-360°) |
+| **13 e 41** (stesso valore ripetuto) | sempre uguale nei due punti, es. `180.0000` | **non è una posizione** (ipotesi originale) — un unico valore ripetuto due volte somiglia più a un *orientamento/heading*, riaffermato con più forza dopo la Fase 24 (vedi sotto) |
+| 17 | sempre 1.00 | flag/costante |
+| **29** | quasi fisso in un breve movimento | **confermata coordinata X** — vedi conferma numerica sotto |
+| 33 | quasi fisso in un breve movimento | non è la Y (non combacia col valore reale, vedi sotto) — resta senza spiegazione |
+| **37** | quasi fisso in un breve movimento | **confermata coordinata Z** — vedi conferma numerica sotto |
+| **61** | **sempre 100.00** | **salute — confermata esatta**, non più solo l'ipotesi più convincente |
+
+### Conferma numerica (Fase 24): finalmente un valore di riferimento indipendente
+
+Fino alla Fase 21 queste ipotesi erano tutte "sembra plausibile" — nessun modo di confrontarle con un valore vero. Il pacchetto `PlayerDamage` (Fase 21) le ha rese verificabili: porta la posizione del bersaglio **in chiaro, senza XOR** (è testo+XOR standard, non binario come l'UDP), quindi è una verità di riferimento indipendente dalla decodifica del movimento.
+
+Con due client reali connessi, un colpo ha riportato il bersaglio a `x=3191.2261, y=98.0820, z=1885.5220`. Decifrando (XOR `0xc3`) il pacchetto di movimento UDP di quello stesso giocatore, catturato pochi istanti prima dello stesso colpo:
+
+```
+offset 13 = 180.0000   offset 41 = 180.0000   (stesso valore, come sempre)
+offset 17 = 1.0000
+offset 29 = 3191.6746   ← combacia con la X reale (3191.2-3191.6)
+offset 33 = 62.7014     ← NON combacia con la Y reale (98.08)
+offset 37 = 1880.6887   ← vicina alla Z reale (1885.4-1885.6, scarto ~5, plausibile nel breve intervallo)
+offset 61 = 100.0000    ← esatto, salute a vita piena
+```
+
+X e salute combaciano con un margine minimo, Z è vicina (normale: qualche secondo di movimento reale è passato tra i due campioni). Offset 33 resta un mistero — non è la Y, nonostante fosse raggruppata insieme a 29/37 come "altra coordinata" nella tabella originale.
+
+### Il tentativo di replay, e dove si è fermato
+
+Per verificare l'ipotesi abbiamo provato a far apparire un "giocatore fantasma": il client finto cattura dal vivo l'ultimo pacchetto di movimento ricevuto dal client vero (che quindi contiene la *sua* posizione reale), lo re-invia sotto la propria identità (mittente/destinatario scambiati nell'header, corpo del pacchetto invariato) in un flusso continuo — invece di un singolo pacchetto isolato, impercettibile.
+
+Meccanicamente ha funzionato alla perfezione: il pacchetto viene costruito, arriva al server, viene relayato al client vero, in streaming continuo, con la posizione presa dal vivo. **Ma nessun personaggio è mai comparso a schermo.**
+
+Questo è il punto in cui l'esplorazione per tentativi (cattura → ipotesi → verifica) smette di bastare. Il relay dimostra che il *trasporto* è giusto; quello che manca è sapere cosa fa scattare nel motore del client la decisione "questo è un giocatore reale, disegnalo" — potrebbe essere un sotto-comando diverso da mandare una volta sola prima del flusso di movimento (`0x10`, `0x30`, `0x32` o `0x34`, mai catturati), un altro pacchetto TCP di sincronizzazione, o un campo del corpo che non abbiamo ancora identificato. Quella logica vive dentro l'eseguibile nativo del client — per trovarla con certezza servirebbe un disassembler (Ghidra, x64dbg), non solo un editor esadecimale e un XOR noto. È esattamente il confine indicato fin dall'inizio di questa guida.
+
+**Aggiornamento (Fase 22)**: il problema del "giocatore fantasma" è diventato meno urgente da quando un secondo client reale è diventato disponibile (server raggiungibile da qualunque rete, Fase 22) — con due giocatori veri non serve più simulare un fantasma per vedere un secondo personaggio a schermo. Il mistero di *cosa* faccia scattare il rendering di un fantasma resta comunque irrisolto e non più indagato da quel momento in poi.
+
+## 12. Livelli ed esperienza: una tabella, non una formula
+
+Il livello non è mai salvato da nessuna parte — solo l'XP grezzo (`user_details.xp`) lo è. Il livello si **deriva** ogni volta cercando in una tabella di 100 soglie (`Core/LevelCalculator.cs`): scorri finché l'XP del giocatore non è più piccolo della soglia corrente, quel punto è il livello.
+
+```
+xp=0      → livello 1   (sotto la prima soglia, 2250)
+xp=2200   → livello 1   (ancora sotto 2250)
+xp=2300   → livello 2   (ha superato la soglia 2250)
+```
+
+**Quando si guadagna XP**: qui il server non ha un vero sistema di punteggio (nessun conteggio uccisioni/morti in game), quindi il momento scelto per "assegnare XP" è quando un giocatore lascia una stanza che è in stato *Playing* — l'equivalente più onesto di "fine partita" che questo server può offrire oggi. La formula stessa (`20 + punti×4×tasso`) degrada correttamente a un premio fisso quando i punti sono sempre zero:
+
+```
+node standalone test:
+GameConfig: { expRate: 5, dinarRate: 5, levelUpMoneyReward: 5000 }   ← da `gameconfig`, non inventato
+applyMatchEnd result: { xpEarned: 100, moneyEarned: 250, levelUp: null }
+```
+
+`100 = ceil((20 + 0) × 5)` — il moltiplicatore premium (Fase 13) *non* cambia questo numero quando i punti sono zero: nella formula originale il bonus premium moltiplica solo il termine `punti×4`, non il `20` fisso. Non è un bug nostro, è così anche nel C# — un dettaglio che si scopre solo leggendo la formula fino in fondo, non intuendolo.
+
+Testato anche l'attraversamento di soglia: partendo da xp=2200 (livello 1) e guadagnando 100 xp → 2300 (livello 2), il server manda il pacchetto `LevelUp` (id `31008`) e assegna il bonus di denaro da `gameconfig.levelup_base_reward` (5000 per livello).
+
+**Gate di livello riportati dal C#**: creare o entrare in una stanza con un limite di livello (1-10, 11+, 21+, 31+, 41+) ora controlla davvero il livello del giocatore, non solo lo mostra — prima veniva solo salvato sulla stanza senza mai essere confrontato con nessuno.
+
+## 13. Premium: Free2Play, Bronze, Silver, Gold (e un quarto tier mai davvero usato)
+
+Il campo "Premium" scoperto per sbaglio nella Fase 3 (serviva a sbloccare l'avvio partita) è un byte con 5 valori possibili — `Game/Enums/Premium.cs`:
+
+```
+0 = Free2Play   1 = Bronze   2 = Silver   3 = Gold   4 = Platinum
+```
+
+Il valore `3` che avevamo hardcoded fin dall'inizio era "Gold" per puro caso, non un codice magico a caso.
+
+### 🐛 Bug del riferimento, non copiato: Platinum manda in crash il bonus XP
+
+L'array dei bonus XP per tier nel C# ha solo 4 celle (`{0, 0.2, 0.3, 0.5}`, indici 0-3): un giocatore Platinum (indice 4) causerebbe un `IndexOutOfRangeException`. Segno che quel tier è stato aggiunto all'enum ma mai davvero completato nel gioco originale. Nella nostra porta, un tier oltre Gold semplicemente non riceve alcun bonus extra (lookup con fallback a 0) invece di far esplodere il server — non un tentativo di "completare" Platinum, solo di non ereditarne il crash.
+
+**Cosa cambia visibilmente per tier**: 5° slot inventario sbloccato per qualunque tier sopra Free2Play (`SlotState` passa da `F,F,F,F` a `T,F,F,F`), e un countdown "tempo premium rimanente" nel pacchetto `Ping` (id `25600`) che il server ora manda ogni 5 secondi a tutti i connessi — pacchetto che prima non esisteva affatto lato nostro (il client sopravviveva comunque, ma senza countdown visibile).
+
+## 14. Clan: qui non c'era nulla da portare
+
+Le prime due fasi (Livelli, Premium) sono state porting: leggere cosa fa il C#, tradurlo. Il clan è diverso — l'opcode `CLAN_SYSTEM` (`0x6710` = `26384`) esiste nella lista dei pacchetti ma **non è mai letto né scritto da nessuna parte** nel codice C# di riferimento: nessun handler, nessun formato di payload, niente da copiare. Tutto quello che segue — i numeri dei sotto-comandi, la forma dei pacchetti — è stato progettato da zero, usando solo la tabella `clan` e i campi `user_details.clanid`/`clanrank` come punti fermi. **Non è ancora verificato contro l'interfaccia reale del client** (non sappiamo se/come il client renderizzi la risposta) — verificato finora solo con due client finti.
+
+Sotto-comandi scelti (dentro l'inviluppo `[sottotipo, ...payload]`):
+
+```
+1 = crea    2 = entra    3 = esci    4 = sciogli    5 = lista membri
+```
+
+Test dal vivo con due client finti (creazione + ingresso + chat):
+
+```
+[client A] OUT id=26384 fields=[1, TestClan, TC]              ← crea clan "TestClan"
+[client A] IN  id=26384 blocks=[1, 1, 1, TestClan, TC]         ← ok, id clan=1, sei master (rango 1)
+[client B] OUT id=26384 fields=[2, 1]                          ← entra nel clan 1
+[client B] IN  id=26384 blocks=[2, 1, 1, TestClan, TC]         ← ok, sei membro (rango 0)
+[client A] OUT id=29696 fields=[10, 0, NULL, WRUser>> hi from A]      ← chat tipo 10 = Clan
+[client B] IN  id=29696 blocks=[1, ..., 10, 0, NULL, WRUser>>hifromA] ← ricevuto
+```
+
+Il tipo di chat `10` (`Game/Enums/ChatType.cs`, `Clan = 10`) è reale — quello sì confermabile dal C#, anche se la logica di inoltro (mai scritta nel riferimento: la chat di clan lì scrive solo su un log DB, non la manda a nessuno) è nostra.
+
+### 🐛 Bug trovato: due richieste ravvicinate si "sorpassavano"
+
+Il primo tentativo (creare un clan e subito chiedere la lista membri) rispondeva "non sei in nessun clan" alla seconda richiesta, subito dopo che la prima aveva confermato la creazione. Causa: gli handler scrivevano prima sul database (con un `await`) e solo *dopo* aggiornavano lo stato in memoria (`u.clanId`). Se due pacchetti dello stesso client arrivano nello stesso istante (stesso blocco TCP), il server li processa uno via l'altro nello stesso istante — il secondo pacchetto veniva gestito mentre il primo era ancora "a metà", con la memoria non ancora aggiornata. **Fix**: aggiornare prima la memoria (sorgente di verità per le risposte immediate), poi scrivere sul database in modo "spara e dimentica" (senza `await`) — lo stesso schema già usato per salvare XP/denaro nella Fase 12. Un promemoria che vale oltre il clan: qualunque handler futuro che mischia `await` e stato condiviso in memoria ha lo stesso rischio.
+
+**Scelte deliberatamente minime per questa prima versione** (non porting, quindi da rivedere quando si testerà con il client vero):
+
+- Entrata diretta, senza inviti/richieste di approvazione.
+- Se il master esce, il clan si scioglie (nessun passaggio di leadership).
+- La lista membri mostra solo chi è **online** in quel momento — i membri offline vivono nel database del game server per id numerico, senza nickname (quello sta nel database di login, separato): unire i due richiederebbe una query cross-database non giustificata per una prima versione.
+- Nessuna persistenza della chat di clan (la tabella `chat_private_clan` esiste ma non viene ancora scritta) — aggiungerla quando servirà una cronologia leggibile dal client.
+
+## 15. Comandi GM: perché non ci si può fidare di un campo mandato dal client
+
+Il C# di riferimento ha un sistema di comandi GM (`Game/Commands/`), ma anche qui solo 3 comandi su 11 elencati nel database sono realmente implementati, e l'invocazione passa per il chatbot interno "Cristina" — fuori scope fin dall'inizio di questo progetto. Quindi, come per i clan (Fase 14), l'**invocazione** è reinventata; il contenuto dei comandi (livello, denaro) non esisteva affatto da portare.
+
+### La scoperta che ha cambiato il progetto: un campo di permesso scritto dal client
+
+Cercando "chi decide chi è GM" nel C#, il campo si chiama `AccessLevel` — e arriva nel pacchetto `Authorization` del Game server (`blocks[7]`) **scritto dal client stesso**. Il riferimento lo rende sicuro con un giro di validazione verso l'Authorization server: il client dichiara un livello, e l'Auth server lo confronta con quello che aveva salvato in sessione al login (derivato lì da `users.status`, colonna del database di *login*, mai del client). Il nostro Game server oggi non fa quella validazione — quindi fidarsi del campo mandato dal client per decidere chi può eseguire comandi GM avrebbe significato: chiunque modifichi il proprio client può autodichiararsi amministratore.
+
+**Soluzione adottata**: un flag `is_gm` aggiunto a `user_details` (lo stesso database di gioco già usato per XP/denaro/premium), mai influenzato da nessun campo che il client manda. Concesso a un account con una query diretta (`UPDATE user_details SET is_gm=1 WHERE id=...`), non da un pacchetto di rete — coerente con come si tratta ogni altro dato sensibile lato server in questo progetto.
+
+### Comandi, come pacchetti di chat travestiti
+
+Nessun nuovo id di pacchetto: un comando è un normale messaggio di chat (`Chat`, id `29696`) che inizia per `/`, intercettato **prima** di essere trasmesso — solo per account con `is_gm=1`, altrimenti `/qualsiasi-cosa` resta testo normale (comportamento scelto apposta: "inghiottire" silenziosamente messaggi di chi non è GM sarebbe più sorprendente che semplicemente non riconoscerli come comando).
+
+```
+[client] chat /setlevel WRUser 15
+[server] GM>> Livello di WRUser impostato a 15 (xp=130725)
+```
+
+La risposta arriva come un normale messaggio di chat "da" un mittente fittizio chiamato `GM`, mandato solo al chiamante — stesso schema già usato per l'errore "utente non trovato" del whisper (Fase 4).
+
+Bersaglio del comando: per nome se il giocatore è online, altrimenti trattato come ID account diretto (funziona anche su chi è offline, senza dover collegare il database di login dove vivono i nickname — stesso taglio già fatto per i clan).
+
+> **Aggiornamento**: il canale di risposta è passato da Notice a Whisper — vedi la nota nella Fase 21.
+
+### 🐛 Bug trovato: un comando ha fatto cadere **l'intero server**
+
+Testando `/addmoney <id> -1000000` su un account con meno di un milione di dinar, il processo Node è crashato del tutto — disconnettendo *tutti* i giocatori collegati, non solo chi aveva digitato il comando. Causa a due livelli:
+
+1. **Immediata**: la colonna `money` è `unsigned` nel database. Il calcolo `money + (-1000000)` va sotto zero *prima* che l'istruzione SQL `GREATEST(0, ...)` abbia la possibilità di riportarlo a zero — MariaDB, invece di troncare, lancia un errore (`ER_DATA_OUT_OF_RANGE`). Corretto convertendo esplicitamente a un tipo con segno prima della somma: `GREATEST(0, CAST(money AS SIGNED) + ?)`.
+2. **Di fondo, più seria**: quell'errore era dentro una funzione `async` mai avvolta in un `try/catch`, in nessun punto della catena di chiamate — un "unhandled promise rejection", che per default fa terminare l'intero processo Node. Un singolo comando malformato bastava a buttare giù il server per chiunque fosse connesso in quel momento. Corretto con una sola modifica nel punto condiviso da cui *ogni* pacchetto in arrivo viene smistato (`game-server.js` e, per lo stesso motivo, `auth-server.js`): se un handler fallisce, l'errore viene loggato e la connessione di chi ha causato il problema resta in piedi — non l'intero server. Una singola guardia nel dispatcher, invece di un `try/catch` da ripetere in ogni handler presente e futuro.
+
+### 🐛 Bug trovato: puntare a un giocatore online per ID lo trattava come offline
+
+`resolveTarget` cercava prima per nickname tra gli utenti online, e solo se falliva trattava l'argomento come un ID diretto (percorso "offline": scrive solo su database). Ma se un GM online viene indicato **per ID** anche mentre è connesso, quel percorso veniva comunque preso — l'aggiornamento arrivava sul database ma **non** sulla copia in memoria di quella sessione attiva, disallineando i due. Alla mossa successiva che avrebbe risalvato i suoi dati (ad esempio uscendo da una partita, Fase 12), il valore vecchio in memoria avrebbe silenziosamente sovrascritto la correzione appena fatta. Corretto cercando l'ID anche fra gli utenti già online, non solo il nickname.
+
+Un promemoria generale, oltre il caso specifico: qualunque comando che confronta o mostra un campo di un oggetto condiviso in memoria *dopo* un `await` rischia di leggere un valore già cambiato da un altro comando arrivato nel frattempo — meglio catturare il risultato in una variabile locale subito dopo averlo calcolato, non ripescarlo più tardi dall'oggetto condiviso.
+
+## 16. Notifiche di presenza: batching per non pagare O(n²) sotto carico
+
+`UserList` (id `28928`) esiste già dalla Fase 3 ma è **su richiesta**: il client la chiede, il server risponde con l'elenco intero — nessuno viene avvisato quando un altro utente si collega o si disconnette. Anche qui il C# di riferimento ha un opcode dedicato mai implementato (`USER_LIST_MODIFY = 28944`, in `txt/Packets.txt` ma in nessun handler) — stessa situazione già vista per clan (Fase 14) e comandi GM (Fase 15): il nome e il numero del pacchetto sono reali, il contenuto è da progettare.
+
+### Il problema di prestazioni da evitare
+
+La tentazione ovvia — un pacchetto broadcast a *tutti* ogni volta che *qualcuno* si connette o disconnette — sotto un carico realistico (es. tutti che si riconnettono dopo un riavvio server) costa lavoro **quadratico**: N eventi, ognuno trasmesso a fino a N destinatari, è N² scritture di socket in una manciata di millisecondi.
+
+Tre scelte, tutte orientate a spezzare quella quadraticità:
+
+1. **Solo un delta, mai l'elenco intero** — il pacchetto contiene solo chi si è aggiunto/rimosso in quella finestra, non l'intero elenco rispedito da capo.
+2. **Batching temporale**: gli eventi si accumulano per 750ms prima di partire in un unico pacchetto. Un login isolato aspetta al massimo 750ms per essere annunciato — impercettibile per un umano — ma cento login nello stesso secondo diventano *un* broadcast con cento voci dentro, non cento broadcast separati.
+3. **Platea ridotta**: solo chi ha `roomId === null` (è in lobby, non in partita) riceve la notifica — stesso filtro già usato per gli aggiornamenti della lista stanze (Fase 4). Chi è a metà partita non ha bisogno di sapere chi si è appena collegato, ed è proprio nei momenti di partita attiva che il server ha già più traffico da gestire (relay UDP, `GameTick`).
+
+### Verificato (meccanica, non resa grafica)
+
+Due client finti, connessi con ~1.5s di distanza: ciascun evento (join di A, join di B, disconnessione di B) genera il proprio pacchetto batched, nella finestra giusta, con il conteggio di aggiunti/rimossi coerente:
+
+```
+[game] IN id=28944 blocks=[1, 0, 100, 1193, WRUser, -1,-1,-1,-1, 0,16, 37757475, 0, 0, 0]   ← 1 aggiunto (se stesso)
+[game] IN id=28944 blocks=[1, 0, 101, 17356, Sidekick, -1,-1,-1,-1, 0,16, 0, 0, 0, 0]        ← 1 aggiunto (il secondo client)
+[game] IN id=28944 blocks=[0, 1, 17356]                                                       ← 0 aggiunti, 1 rimosso
+```
+
+Come per il clan, a questo punto la **meccanica** (batching, platea, formato interno coerente) era verificata solo sui log — se il client reale avrebbe mostrato qualcosa alla ricezione di questo opcode inventato restava da provare dal vivo. Non l'ha mostrato: vedi sotto.
+
+### 🐛 Bug trovato: l'opcode inventato viene ignorato — il client capisce solo quello che già conosce
+
+Test dal vivo: collegando un client finto mentre il client reale era aperto sulla lista utenti, **non succedeva nulla visibilmente** — nonostante i log confermassero che il pacchetto `USER_LIST_MODIFY` (`28944`) veniva costruito e inviato correttamente. Cliccando invece manualmente "aggiorna" nella UI, la lista si aggiornava. La spiegazione più semplice è anche la più probabile: **28944 non è mai stato implementato nemmeno nel client**, non solo nel server — è un nome di opcode rimasto nei file di riferimento senza che nessuno, né server né client, lo abbia mai davvero scambiato. Un client non aggiorna nulla alla ricezione di un pacchetto che non sa interpretare; lo ignora silenziosamente, senza errori né segnali visibili — motivo per cui "non vedo nulla" non ha prodotto alcun indizio nei log lato client.
+
+**Correzione**: invece di inventare un formato nuovo, riusare **lo stesso pacchetto che il click "aggiorna" già produce** (`UserList`, id `28928`, confermato funzionante) e rimandarlo in automatico ai giocatori interessati, con lo stesso batching a 750ms di prima. Non è più un "delta" (aggiunto/rimosso) ma l'intero elenco ricostruito da capo a ogni invio — costa qualche byte in più, ma è l'unica versione che il client sa davvero mostrare. Verificato dal vivo: il client reale ha ricevuto e mostrato correttamente un aggiornamento contenente la sessione di un *altro* utente (il client finto) — prova che il pacchetto non è legato a chi lo ha originariamente richiesto, ma è un semplice "ecco chi è connesso ora" valido per chiunque lo riceva.
+
+### Una nota sulla paginazione
+
+Il campo `page` di `UserList` **non filtra** chi viene incluso nel pacchetto: sia la versione su richiesta sia quella spinta in automatico mandano sempre l'**elenco intero** di chi è connesso — cambia solo l'offset numerico del campo "indice" di ogni voce (`indice = i + page×10`), non l'elenco stesso. Questo è già così nel C# di riferimento (`Packets/UserList.cs` itera l'intera lista qualunque sia la pagina richiesta), non una scelta fatta qui — la spiegazione più probabile è che `page` sia un suggerimento su "da dove far partire la vista", non un vero filtro: il client riceve sempre tutti i dati e pagina localmente.
+
+Questo significa che un eventuale problema di paginazione sarebbe identico sia per il click sia per il push automatico — non c'è un bug introdotto apposta dal meccanismo di notifica. L'unico rischio specifico del push: ogni sessione ricorda solo l'ultima pagina richiesta esplicitamente (`userListPage`, di default `0`); se un giocatore naviga a una pagina diversa da 0 e poi chiude quella schermata senza tornare indietro, un push successivo arriverebbe comunque con gli indici offset per quella pagina — l'elenco completo ci sarebbe comunque, quindi nella peggiore delle ipotesi è un disallineamento cosmetico, non dati mancanti. Con il numero di account usati per questi test (ben sotto la soglia di 10 che fa scattare una seconda pagina), lo scenario non si presenta mai in pratica.
+
+## 17. Inventario e shop: qui il C# è completo, non uno scheletro
+
+A differenza di clan (Fase 14) e comandi GM (Fase 15) — dove il riferimento aveva solo il nome di un opcode e nient'altro — inventario e shop nel C# sono **reali e funzionanti**: `Game/Handlers/Itemshop.cs`, `Game/Handlers/Equipment.cs`, `Game/Managers/ItemManager.cs` e sei tabelle DB (`item_weapons`, `item_extra`, `item_shop`, `item_equipment`, `user_inventory`, `user_equipment`) sono tutte popolate con 148 oggetti reali. Qui il lavoro è stato tradurre fedelmente, non inventare.
+
+### Il modello dati
+
+Tutte le tabelle oggetto condividono la stessa chiave: un codice a 4 lettere (`DA02`, `DC01`, `CA04`...). `item_weapons`/`item_extra` sono il catalogo; `item_shop` dice se e a che prezzo un codice si compra (`cost` è un elenco di 5 prezzi, indicizzati per durata: 3/7/15/30 giorni + un quinto valore "permanente", quasi sempre `-1` nei dati di test); `item_equipment` dice in quali slot/classe un'arma può stare (una griglia CSV a 8 flag per ognuna delle 5 classi). **10 armi di base** (`DA02, DB01, DF01, DG05, DC02, DJ01, DR01, DQ01, DN01, DL01`) si possono sempre equipaggiare gratis, senza possederle — sono la dotazione di partenza.
+
+`user_inventory` registra un acquisto (chi, cosa, quando, per quanto, a che prezzo) — nessuno slot persistito, la posizione in inventario è solo una nozione a runtime. `user_equipment` è una riga per utente con 5 colonne CSV (una per classe) — è letteralmente la stessa stringa spedita al client.
+
+### Acquisto (`Itemshop`, id `30208` = `0x7600`)
+
+```
+[client] buy DC01 1     → OUT id=30208 fields=[1110, DC01, 0, 0, 1]
+[server] IN  id=30208 blocks=[1, 1110, -1, 3, 1, DC01-1-0-26082810-0, 145100, F,F,F,F]
+```
+
+Ordine di validazione identico al C#: codice/formato → in vendita → spazio in inventario (max 32) → premium richiesto → livello richiesto → prezzo per quella durata esiste → denaro sufficiente → non già posseduto. Ogni passo ha un codice di errore reale già noto dal riferimento (es. `97040` = denaro insufficiente, `97070` = inventario pieno). Un codice inesistente o una durata fuori range fanno chiudere la connessione, non un errore "normale" — stessa scelta del C# (lì trattati come probabile tentativo di manomissione del pacchetto).
+
+Verificato dal vivo: acquisto scala il denaro esattamente del prezzo giusto, l'oggetto compare nell'`Itemlist`, ricomprare lo stesso oggetto ancora valido dà `97020` (non comprabile) invece di procedere.
+
+### 🐛 Bug trovato nel C# (non copiato): il rinnovo disallinea DB e memoria
+
+Leggendo `Itemshop.cs` fino in fondo: se ricompri un oggetto che già possiedi (non "retail"/permanente), il riferimento non aggiorna la riga esistente — ne **inserisce una seconda**, mentre solo la scadenza in memoria viene estesa. Nel tempo, DB e stato a schermo divergono. Invece di portare questo comportamento (o correggerlo senza che nessuno l'abbia chiesto), qui possedere ancora un oggetto valido blocca semplicemente un nuovo acquisto — il rinnovo vero si aggiunge quando servirà davvero, con una progettazione voluta invece di ereditare un bug.
+
+### Equipaggiamento (`Equipment`, id `0x7512`, stesso pacchetto di sempre — cambia solo cosa c'è dietro)
+
+Prima (Fase 4/9) accettava **qualunque** codice a 4 lettere, senza controllare nulla, e l'equipaggiamento spariva alla riconnessione. Ora:
+
+- il codice deve esistere nel catalogo, essere un'arma attiva
+- deve poter stare in quello slot per quella classe (matrice `item_equipment`)
+- il giocatore deve possederlo davvero (o essere una delle 10 armi di base)
+- il risultato si **salva** su `user_equipment` — sopravvive alla riconnessione
+
+```
+[client, non-GM] equip 3 0 DC01   ← slot non valido per DC01 in quella classe, e non posseduto
+[server] Game: disconnected        ← trattato come probabile manomissione, non un errore normale
+```
+
+### 🐛 Dettaglio trovato leggendo il codice: il bypass GM è più stretto di quanto pianificato
+
+Nel piano avevo scritto che un account GM avrebbe saltato anche il controllo di possesso. Leggendo `Equipment.cs` byte per byte, invece, `AccessLevel > 3` nel C# salta **solo** il controllo "questo slot va bene per questa classe" — il possesso resta obbligatorio comunque. Corretto in corsa per restare fedele al riferimento: un GM può forzare un'arma valida in uno slot "sbagliato" per testare, ma deve comunque possederla (comprarla, o usare `/addmoney` per finanziarsi) — coerente con l'idea che gli altri sistemi nuovi (shop) vadano provati attraverso se stessi, non aggirati.
+
+Verificato dal vivo: un account GM in uno slot non idoneo per quella classe → equipaggiamento riuscito comunque (bypass confermato); lo stesso identico oggetto, non posseduto, su un account non-GM → disconnessione. Un oggetto di base già equipaggiato in quello slot → errore "già equipaggiato" (`97090`); rimosso e poi ri-equipaggiato → funziona di nuovo.
+
+### Rimandato deliberatamente
+
+Rinnovo di un oggetto posseduto (vedi sopra), statistiche di combattimento delle armi (`item_target_info` — non c'era ancora un sistema di danno reale che le usasse, colmato in parte dalla Fase 21), valuta premium `cash` (i prezzi qui sono trattati sempre in dinar), `UseItem`/`RemoveItem` (mai implementati nemmeno nel riferimento).
+
+## 18. Scadenza del premium in tempo reale
+
+Dalla Fase 6, il premium veniva calcolato **solo al login** (`effectivePremium()`): se scadeva mentre un giocatore era già connesso, non succedeva nulla finché non si riconnetteva — il countdown nel `Ping` mostrava correttamente `-1`, ma il campo `premium` vero e proprio restava quello vecchio, con bonus XP e badge ancora attivi ben oltre la scadenza reale.
+
+**Rilevamento**: riusato il loop di `Ping` (già gira ogni 5s su tutti — lo stesso punto in cui il C# di riferimento chiama `UpdatePremiumState()`, appena prima di ogni invio). Ad ogni giro, se il premium risulta scaduto, torna a Free2Play sia in memoria sia sul database (`checkPremiumExpiry()` in `progression.js`).
+
+**Comportamento scelto** (con l'utente): solo un avviso in chat, **nessuna disconnessione forzata** — a differenza di `/setlevel`/`/addmoney`, il bonus XP e il badge premium nella lista giocatori si leggono dal vivo da `u.premium`, quindi smettono di applicarsi immediatamente; resta indietro solo il 5° slot inventario (mostrato una volta sola nel pacchetto Authorization) finché non ci si riconnette da soli — stesso limite già noto e accettato per livello/denaro.
+
+Nuovo comando `/setpremium <giocatore|id> <tier 0-4> <giorni>` per assegnare un premium con una scadenza vera — prima non esisteva alcun modo di testarlo se non con query SQL dirette (i due account seed hanno una `premium_expiredate` con un'unità sbagliata ereditata dai dati originali — sembra millisecondi ma viene confrontata come secondi — che li rende "premium per sempre" e mai testabile). `giorni=0` concede il tier senza scadenza pratica (100 anni).
+
+### 🐛 Bug trovato durante il test: il comando disconnetteva il bersaglio prima ancora che potesse scadere
+
+Il primo tentativo di verifica (concedere 60 secondi di premium e aspettare) non mostrava mai la scadenza: il bersaglio veniva disconnesso **5 secondi dopo la concessione**, non dopo lo scadere. Causa: `/setpremium` era stato scritto copiando lo stesso schema di `/setlevel`/`/addmoney`, che disconnettono sempre chi viene modificato per forzare un rilogin — necessario lì (livello e denaro si vedono solo dal pacchetto Authorization), ma non per il premium, i cui effetti principali sono già letti dal vivo. Rimossa la disconnessione forzata dalla concessione — coerente con la scelta appena fatta di rendere anche la *scadenza* solo un avviso, non un'espulsione.
+
+Verificato dal vivo: concesso Gold per 60 secondi a un secondo client rimasto connesso, il countdown nel `Ping` scende regolarmente fino a scadere, arriva l'avviso in chat, `premium`/`premium_expiredate` tornano a zero sul database — e il client **resta connesso**, nessuna disconnessione.
+
+## 19. Clan war: vuota quanto il clan system lo era all'inizio
+
+Prima di progettare, un controllo più a fondo di quanto fatto in Fase 14/15: `Room.isClanWar`/`Clan1`/`Clan2` esistono e vengono persino trasmessi al client (`-1` = no, `>0` = sì, in `RoomCreation`/`RoomList`/`RoomJoin`/`RoomUpdate`/`RoomSpectate`) — ma **nessuna stanza viene mai creata con `isClanWar=true`** in nessun punto del codice: la chiamata al costruttore in `RoomCreation.cs` lo passa sempre `false`, cablato. Anche `Clan1`/`Clan2` non vengono mai trasmessi sul filo — un commento dice letteralmente "IF ENABLED ADD 2 BLOCKS WITH BOTH OF THE CLAN IDS", mai abilitato. L'unica logica reale: `!isClanWar` disabilita il cambio squadra libero, e `Room.Add()` ha un controllo `ClanRank<1` che — con un modello di rango binario come il nostro — bloccherebbe *tutti* i membri normali dall'entrare in una guerra del proprio clan. Con zero stanze mai create in stato clan-war, questo controllo non è mai stato eseguito da nessuno: scaffolding morto, non una funzione testata.
+
+**Scostamento deliberato**: il controllo `ClanRank<1` non è stato portato. Qualunque membro del clan, di qualunque rango, può partecipare — altrimenti la funzione sarebbe inutilizzabile per chiunque non sia il master.
+
+### Come funziona qui (progettato da zero)
+
+Nuova sotto-azione nel `CLAN_SYSTEM` già esistente (Fase 14): un master di clan dichiara guerra a un altro clan per ID. Il server crea subito una stanza (nessun accetta/rifiuta in questo giro), con `isClanWar=1`, e assegna la squadra in base al clan di appartenenza invece che a scelta — clan sfidante → squadra 0, clan sfidato → squadra 1. Il clan sfidato riceve un avviso in chat (stesso canale "Notice" di GM/premium).
+
+```
+[A, master di Alpha] clan war 1        → dichiara guerra al clan Beta (id 1)
+[B, membro di Beta]  IN id=29696 blocks=[..., Alpha ha dichiarato guerra al tuo clan! Stanza #1 pronta.]
+[B]                  join 1            → IN id=29456 blocks=[1, 8, ...]   ← slot 8 = metà squadra 1, assegnato non scelto
+```
+
+Un cambio squadra manuale in una stanza di guerra non ha alcun effetto (stesso schema "ignora silenziosamente" già usato altrove nel dispatcher `GamePacket`).
+
+### 🐛 Bug trovato riusando il clan system della Fase 14: l'appartenenza andava stantia dopo una riconnessione
+
+Il primo tentativo di notificare il clan sfidato non arrivava mai a destinazione, pur senza errori. Causa: `clan.members` era un `Set` di ID di sessione popolato solo alla creazione/ingresso nel clan — mai aggiornato quando un membro si riconnette con una sessione nuova. La chat di clan (Fase 14) non aveva questo problema perché deriva l'appartenenza dal vivo da `users` filtrando per `clanId`, non da un Set separato; lista membri e scioglimento clan invece lo avevano, solo che non era mai emerso perché nessun test li aveva ancora esercitati dopo una riconnessione. Corretto alla radice: eliminato il `Set`, ogni punto che aveva bisogno di "chi è online in questo clan" ora usa lo stesso metodo già corretto della chat.
+
+### 🐛 Bug trovato, pre-esistente e non specifico della clan war: i giocatori "fantasma"
+
+Testando la clan war (che nel test comportava molte riconnessioni con lo stesso account), un giocatore appariva **due volte** nel roster della stanza sotto lo stesso nome, da sessioni ormai chiuse. Causa: chiudere la connessione senza mandare un `ROOM_LEAVE` esplicito (client chiuso, crash, o semplicemente `quit` del client di test) non rimuoveva mai il giocatore dalla stanza — solo dall'elenco utenti globale. Bug presente fin dalla Fase 4, mai emerso prima perché i test precedenti uscivano sempre esplicitamente dalla stanza. Corretto: la stessa pulizia che avviene su `ROOM_LEAVE` esplicito ora avviene anche alla disconnessione — verificato indirettamente durante il test stesso: una stanza di guerra lasciata vuota (l'unico giocatore si disconnette) sparisce subito, invece di restare fantasma in lista per sempre.
+
+### Rimandato deliberatamente
+
+Nessun accetta/rifiuta della sfida (la stanza esiste subito); nessun punteggio o vittoria reale (non esiste ancora un sistema di combattimento completo con condizioni di vittoria per clan war — le colonne `wins`/`losses`/`draws` già su `clan` restano ferme).
+
+## 20. Coupon: qui "eventi" significava qualcos'altro
+
+Prima di progettare qualsiasi cosa, un controllo a fondo su cosa significhi davvero "eventi" in questo C#: gli opcode `EVENT_*` (`EVENT_HOT_TIME_CLAN_WAR`, eventi stagionali, ecc.) sono nomi che compaiono solo nei dump grezzi dei pacchetti del client — **non entrano nemmeno nell'enum del server**, zero handler, zero tabelle, ancora meno scaffolding di quanto avesse la clan war prima della Fase 19. Il comando GM `gift` (elencato nella tabella `commands`) è nella stessa condizione: una riga di permessi senza una riga di codice dietro.
+
+Quello che invece esiste per davvero, completo e funzionante, è il sistema **coupon**: un codice testuale che si scambia con denaro e/o oggetti. Stessa maturità dell'inventario/shop (Fase 17) — qui si porta codice vero.
+
+### Il flusso (`Coupon`, id `33024` = `0x8100`, stesso id in entrata e in uscita)
+
+```
+[client] coupon MEOW      → OUT id=33024 fields=[MEOW]
+[server] IN  id=33024 blocks=[0, 0, 119000]                                    ← successo, denaro accreditato
+[client] coupon PEWPEW    → OUT id=33024 fields=[PEWPEW]
+[server] IN  id=30208 blocks=[1, 1110, -1, 3, 1, DF07-1-0-26092012-0, 119000, F,F,F,F]  ← oggetto, tramite il pacchetto shop
+```
+
+Dettaglio del riferimento riusato fedelmente: per i premi in oggetti, il C# non risponde con un pacchetto Coupon proprio — rispedisce il pacchetto di successo dello shop (Fase 17), lo stesso già scritto per gli acquisti normali. Qui è bastato esportare due funzioni già esistenti (`grantItem`, `sendSuccess` di `shop.js`) invece di riscrivere la logica una seconda volta.
+
+Un coupon ha un contatore di usi: `0` = esaurito, `-1` = illimitato, un numero positivo che scende a ogni redenzione. I dati di test già nel seed coprono tutti i casi: `MEOW` (illimitato, solo denaro), `PEWPEW`/`NINJA`/`ASSAULT`/`HEALSLUT` (illimitati, oggetti), `ROBINHOOD` (esaurito, per testare quel caso).
+
+### Un buco reale del riferimento, chiuso qui
+
+Il C# non traccia da nessuna parte *chi* ha già usato un coupon — un coupon a usi illimitati si può ripetere all'infinito con lo stesso account, semplicemente ridigitando lo stesso codice. Per un sistema pensato per restare in piedi (non solo per il test una tantum di questo progetto), è un buco genuino: aggiunta una tabella `user_coupons` con vincolo di unicità (proprietario, coupon), caricata al login come inventario/equipaggiamento. Un coupon già usato torna "esaurito" per chi lo ridigita — stesso codice di risposta già usato per quel caso, nessun nuovo valore inventato sul filo.
+
+Verificato dal vivo in sequenza su un unico account: `MEOW` accredita denaro (50000→119000, esatto), `PEWPEW` accredita l'oggetto senza toccare il denaro, `ROBINHOOD` risponde "esaurito", un codice inventato risponde "non valido", e ridigitare `MEOW` una seconda volta — pur essendo il coupon ancora a usi illimitati — viene correttamente bloccato dal nuovo guardiano per-utente.
+
+## 21. Danno, morte, respawn: il primo giro di combattimento vero
+
+Fase testata con **due client reali contemporaneamente** (non client finti), grazie alla scoperta della Fase 22 (server multi-rete) che l'ha resa possibile lo stesso giorno — vedi sotto per come i due si intrecciano.
+
+### Il buco: colpire qualcuno non faceva nulla
+
+Un colpo sparato da un client reale contro l'altro produceva un `GamePacket` con sotto-tipo `103` — **mai visto prima**, non nella tabella `SUB` di `gamesubs.js` e quindi silenziosamente scartato (`if (!handler) return;`, lo stesso comportamento "ignora quello che non conosci" già documentato più volte in questa guida). Il colpito non riceveva mai conferma del danno subito. Pochi secondi dopo, il client colpito ha mandato da solo un `ROOM_LEAVE` e si è disconnesso dalla stanza — la spiegazione più semplice è che il client, non ricevendo mai risposta al proprio colpo/al danno subito, abbia deciso lato suo che qualcosa non andava.
+
+`103` = `PlayerDamage` (`Game/Enums/GameSubs.cs`). Nel riferimento C# **non è affatto uno scheletro**: `Objects/GameMode.cs`'s `OnDamage`/`DamagePlayer` è un sistema reale, con formula danno per arma (`Weapon.Power` × `Weapon.PowerPersonal` × un moltiplicatore per hitbox — testa/torso/arti/zona sniper, da `GameConfig`), rilevamento headshot, regole di friendly-fire diverse per modalità (FFA: sempre PvP), e la promozione automatica dello stesso pacchetto a `PlayerDeath` (`152`) quando la vita arriva a zero.
+
+Verificare **tutta** quella formula subito non era possibile: il nostro catalogo oggetti (148 voci, Fase 17) non porta ancora i campi `Power`/hitbox delle armi — servirebbe prima estendere lo schema item con quei dati da `WarRock-Chapter-1-Server/Databases/*.SQL`. Scelta fatta con l'utente: sbloccare **morte, respawn e conteggio uccisioni/morti** subito con un danno fisso per colpo, rimandando la formula reale a quando servirà davvero.
+
+### Cosa esiste ora (semplificato, non porting fedele)
+
+`gamesubs.js`'s `handlePlayerDamage`, dichiarata `ponytail:` nel codice:
+
+- **25 danni fissi per colpo** (4 colpi per uccidere da 100 di vita) invece della formula arma/hitbox del riferimento.
+- Nessuna regola di friendly-fire/squadra — chiunque nella stanza, tranne se stesso, è un bersaglio valido finché è vivo. Il campo `room.mode` non è ancora tracciato in modo affidabile (vedi Fase 8/9), quindi non c'era una base solida su cui applicare le regole FFA/TDM del C#.
+- Alla morte: `victim.alive=false`, `victim.deaths++`, `attacker.kills++`, persistiti su `user_details.kills`/`deaths` in modalità "spara e dimentica" (stesso schema già usato per XP/denaro dalla Fase 12).
+- Il pacchetto stesso viene ripromosso da `PlayerDamage` (103) a `PlayerDeath` (152) sull'ultimo colpo — stesso trucco del riferimento (`handler.type = GameSubs.PlayerDeath`), qui fatto passando un `newType` diverso dal `subType` in ingresso.
+- `ConfirmDeath` (154): ack del client a fine animazione di morte, nessuna risposta prevista — stesso schema già visto per `ConfirmSpawn` (100) dalla Fase 9.
+- Respawn: già gestito dal semplice riutilizzo di `SPAWN` (150, Fase 9) — ora resetta anche `health=100`/`alive=true`, non solo la posizione.
+
+`roomPlayerFields` (il roster della stanza, Fase 4) ora riporta `health`/`kills`/`deaths` reali del giocatore invece dei placeholder fissi usati da inizio progetto.
+
+### Cattura reale contro due client, sequenza pulita
+
+```
+Game IN  id=30000 blocks=[0, 1, 2, 103, 0, 1, 1, 4, 0, 1, 0, 1, 0, 0, 0, 23952, ...]   ← colpo 1, targetSlot=4
+OUT(broadcast x2) id=30000 fields=[..., 103, ..., 75, 100, ...]                         ← salute 100→75
+Game IN  id=30000 blocks=[..., 103, ...]                                                ← colpo 2
+OUT(broadcast x2) id=30000 fields=[..., 103, ..., 50, 75, ...]                          ← 75→50
+Game IN  id=30000 blocks=[..., 103, ...]                                                ← colpo 3
+OUT(broadcast x2) id=30000 fields=[..., 103, ..., 25, 50, ...]                          ← 50→25
+Game IN  id=30000 blocks=[..., 103, ...]                                                ← colpo 4
+OUT(broadcast x2) id=30000 fields=[..., 152, ..., 0, 25, ...]                           ← 25→0, tipo promosso a PlayerDeath
+Game IN  id=30000 blocks=[4, 1, 2, 154, ...]                                            ← ConfirmDeath dal colpito, nessuna risposta
+Game IN  id=30000 blocks=[4, 1, 2, 150, ...]                                            ← respawn, Spawn come sempre
+```
+
+Quattro colpi, salute che scende esattamente di 25 ogni volta, promozione a morte al colpo giusto, nessun errore — funziona al primo tentativo contro due client reali, non solo client finti.
+
+### Rimandato deliberatamente
+
+Formula danno reale (serve estendere il catalogo item con `Power`/hitbox), regole friendly-fire per modalità, headshot, veicoli/artiglieria/oggetti (`ObjectDamage`, Fase successive se servirà), condizioni di vittoria/fine round — quest'ultima è la Fase 23.
+
+## 22. Un secondo client reale: multi-rete, non multi-istanza
+
+Per la Fase 21 serviva un vero secondo giocatore, non un client finto — il danno/morte va confermato contro il rendering vero del client, non solo contro i log. Il gioco non permette due istanze sullo stesso PC (vedi Fase 7): la soluzione qui non è stata aggirare quel limite, ma eseguire il secondo client su una **rete virtuale diversa** (una VM/sandbox sulla stessa macchina, via Hyper-V Default Switch) — un PC diverso agli occhi del client, zero bisogno di toccare quel limite.
+
+### Il sintomo: connesso, ma "Connection failed"
+
+Login riuscito (il client riceve la lista server), ma la connessione al Game server falliva subito con un errore generico lato client ("Connection failed. Returning to the main screen") — **senza che il nostro Game server registrasse alcun tentativo di connessione**. Il login arrivava da un IP di rete (`172.21.238.209`), non da `127.0.0.1`.
+
+Causa: `config.json`'s `serverIp` era hardcoded a `127.0.0.1` — l'Authorization server lo rispedisce dentro `ServerList` come indirizzo a cui il client deve connettersi per il Game server (Fase 3). Per un client sulla stessa macchina, `127.0.0.1` funziona per definizione. Per un client su un'altra rete/VM, `127.0.0.1` significa "connettiti a te stesso" — non arriva mai al nostro server.
+
+### La soluzione: rispecchiare l'indirizzo che ha già funzionato
+
+Invece di scegliere un IP fisso in config (che si romperebbe di nuovo con una terza rete diversa), l'Authorization server ora risponde con l'indirizzo **locale della connessione TCP in ingresso** (`socket.localAddress`, spogliato del prefisso IPv4-mapped `::ffff:`) invece del valore statico di `config.json`. Auth e Game girano sullo stesso host e ascoltano su tutte le interfacce di rete (verificato: nessun `host` esplicito in nessuna `.listen()`/`.bind()`) — qualunque indirizzo un client abbia usato per raggiungere l'Auth server raggiunge anche il Game server.
+
+```
+auth/handlers.js:
+  const gameIp = localIp(socket);  // socket.localAddress, senza "::ffff:"
+  for (const s of servers) fields.push(s.id, s.name, gameIp, PORTS.game, s.playerCount, s.type);
+```
+
+`config.json`'s `authServerIp`/`serverIp` restano `127.0.0.1` — sono solo il canale interno Auth↔Game sullo stesso host (Fase 2), non più quello che arriva ai client.
+
+Verificato dal vivo: client sulla VM (`172.21.224.0/20`, dietro l'Hyper-V Default Switch) riceve `172.21.224.1` come indirizzo del Game server e si connette correttamente; un client sulla stessa macchina (`127.0.0.1`) continua a funzionare con `127.0.0.1` — stesso server, stesso codice, nessuna configurazione da cambiare quando cambia la rete di chi si collega.
+
+### 🐛 Bug trovato: stesso account, due sessioni contemporanee
+
+Con due client reali finalmente possibile, è emerso subito un buco pre-esistente mai notato con i client finti (che di solito usavano account diversi apposta): **lo stesso account poteva autenticarsi sul Game server da due connessioni contemporaneamente**. Il riferimento C# ha per questo un intero giro di validazione tra Auth e Game (`Session`/`SessionManager`, pacchetti interni `PlayerAuthorization`) — non portato per intero (avrebbe richiesto uno stato di sessione a due fasi su entrambi i processi solo per questo). Invece, un controllo diretto e sufficiente nel Game server: alla `Authorization`, se un altro utente online ha già lo stesso `userId`, la seconda connessione riceve `92040` (`IdInUse`, codice reale del C#) e viene chiusa — una scansione della mappa `users` già in memoria, niente di nuovo da costruire.
+
+## 23. Comandi GM: canale di risposta corretto, e un secondo comando
+
+Due correzioni minori emerse testando con due client reali in parallelo (Fase 21/22):
+
+- **`/help` collide con un comando built-in del client** — digitarlo mostra l'help *del client*, il messaggio non arriva mai al server come chat. Rinominato in `/gmhelp`.
+- **Le risposte GM apparivano come "Notice"** (un tipo di messaggio confermato funzionante dalla Fase 4, usato per i messaggi "il server ti parla"), non come una riga nella chat normale. Cambiato in `Whisper` (tipo `6`, Fase 4) con i campi target (sessionId/nome del **destinatario**, non del mittente fittizio "GM") valorizzati come in un sussurro reale ricevuto — un tentativo precedente di usare Whisper aveva quei campi vuoti e non renderizzava affatto; verificato dal vivo che con i campi corretti funziona.
+
+## 24. Fine round e condizione di vittoria: chiudere il ciclo
+
+Con danno/morte/respawn già in piedi (Fase 21), mancava il pezzo che chiude un round: qualcuno raggiunge un obiettivo (o resta l'unico in piedi), la partita finisce, si torna alla lobby della stanza. Testato dal vivo con due client reali, ognuno dei pezzi sotto è emerso rompendosi in un modo diverso.
+
+### Condizione di vittoria e pacchetto EndGame
+
+Semplificata rispetto al riferimento: una sola regola di kill-limit condivisa da ogni stanza (`10 + 5×setting`, la formula di `Modes/FreeForAll.cs`) invece delle regole per-modalità del C# (TDM/Conquest hanno le proprie, non portate — `room.mode` non è tracciato in modo affidabile, Fase 8/9), più "resta un solo giocatore" come caso universale. Controllata subito dopo ogni uccisione (stesso punto in cui il C# chiama `OnDeath`), non su un ciclo a bassa frequenza.
+
+A fine round: pacchetto `EndGame` (id `30048` = `0x7560`, **non** dentro il contenitore `GamePacket` — un id a sé, come `GameTick`), con XP/denaro guadagnati per giocatore (riusa la stessa formula di `applyMatchEnd`, Fase 12, ora con `points = kills` reali invece di sempre 0) e persistiti su DB.
+
+```
+Game IN  id=29504 (RoomLeave) blocks=[]                          ← un giocatore esce a metà partita
+OUT(broadcast x1) id=30048 (EndGame) fields=[1, 1, 0, 0,0,0,0, 0,0, 1, 0,0,0,0,0, 250, 100, 37758075, 0]
+```
+
+### 🐛 Bug trovato: il client resta bloccato sulla schermata dei risultati
+
+Dopo `EndGame`, il client manda `BackToLobby` (sotto-tipo `9` dentro `GamePacket`) — il primo tentativo rispondeva `null` (stesso schema "fire-and-forget" di `ConfirmSpawn`/`ConfirmDeath`), ragionando che non ci fosse nient'altro da fare visto che `endRound()` aveva già rimesso la stanza in `Waiting`. Risultato osservato: **entrambi i giocatori restavano bloccati sulla schermata di fine partita**, nessuno tornava alla lobby. Rileggendo `Handlers/Game/Ingame/BackToLobby.cs`: il riferimento ha sempre `respond = true; selfTarget = true;` — il client aspetta l'eco del proprio pacchetto prima di far sparire quella schermata. Bastava rispondere con lo stesso payload, solo al mittente.
+
+### 🐛 Bug trovato: chi resta in stanza continua a vedere anche chi se n'è andato
+
+Dopo la correzione sopra, un giocatore usciva correttamente (tornava alla lobby, la vedeva in lista), ma **l'altro, rimasto nella stanza, continuava a vedere entrambi i giocatori nel roster** — come se nessuno fosse mai uscito. La causa era in `Room.Remove` nel C#: il pacchetto `RoomLeave` viene mandato **due volte** — una al giocatore che esce, e una in *broadcast a tutti quelli rimasti nella stanza* (`Send(pBuffer); u.Send(pBuffer);`). La nostra versione lo mandava solo a chi usciva. Aggiunta la stessa broadcast verso i membri rimasti.
+
+### 🐛 Bug trovato: lo slot sbagliato nella risposta RoomLeave
+
+Nello stesso punto, il terzo campo di `RoomLeave` è lo **slot che il giocatore occupava** (`Packets/RoomLeave.cs`'s `oldSlot`) — noi lo mandavamo sempre a `0`, indipendentemente da chi uscisse davvero. Se chi usciva non era in slot 0 (es. slot 4), il client riceveva "slot 0 se n'è andato" — un'informazione sbagliata, probabile causa di comportamenti imprevedibili lato client su chi doveva reagire all'uscita. Anche gli ultimi due campi (XP/denaro del giocatore) erano sempre `0, 0` invece dei valori reali post-pagamento.
+
+### 🐛 Bug trovato: nessuna risposta a una richiesta di lista stanze già in corso
+
+Durante lo stesso test, un client chiedeva `RoomList` (id `29184`) di sua iniziativa (refresh manuale, o cambio pagina) — noi non avevamo **nessun handler registrato** per quell'id come richiesta, solo come pacchetto che il server manda proattivamente dopo `ChannelSelection` (Fase 6). Il C# ha invece un intero `Handlers/RoomList.cs` dedicato, con paginazione (`direction`, calcolata come differenza fra due campi) e un filtro "solo stanze in attesa" (`waitingOnly`). Implementato fedelmente, incluso il dettaglio che **risponde solo se il giocatore non è in una stanza** (`u.Room == null`) — chi è ancora dentro una stanza non riceve questa risposta, il suo roster si aggiorna tramite le broadcast dirette (`sendRoomUpdateToLobby`), non ri-richiedendo la lista.
+
+### Spawn dinamico in FFA
+
+Tutti i giocatori spawnavano nello stesso punto — mandavamo sempre `0` come indice di spawn. Nel C#, `Modes/FreeForAll.cs`'s `SpawnSlot()` è un contatore round-robin condiviso da tutta la stanza (0-19, poi ricomincia), non legato a quale giocatore chieda di spawnare: il primo che manda `Spawn` in un round prende l'indice 0, il secondo l'1, e così via. Il server non sa dove si trovi fisicamente ogni indice sulla mappa (nessun dato di mappa reale) — manda solo il numero, è il client a tradurlo in una posizione usando i propri dati. Il contatore si azzera a ogni nuovo round (`Start`), come `blnFirstSpawn` nel riferimento.
+
+### Limite noto: vittoria/sconfitta in FFA
+
+Un test con la squadra 0 rimasta da sola in stanza ha mostrato **LOSE** invece di WIN — controintuitivo. Rileggendo il C# fino in fondo: `FreeForAll.Winner()` restituisce sempre `Team.None`, mai una squadra reale — e `Room.EndGame()` assegna `Wins++` solo se `player.Team == winning`. Siccome nessun giocatore ha team `None`, **in FFA ogni giocatore riceve sempre `Losses++`, mai `Wins++`, anche nel riferimento originale**: non è un bug nostro, è il comportamento letterale del codice originale. Il "vincitore" in una FFA reale si vede probabilmente solo dalla classifica per punti/uccisioni, non da un banner win/lose per squadra — ma senza vedere il client non possiamo esserne certi. Un primo tentativo di correzione (assegnare esplicitamente un "round vinto" alla squadra rimasta) non ha cambiato l'esito osservato — accantonato come limite noto, invece di continuare a indovinare alla cieca.
+
+### Limite noto: headshot non distinguibile dal campo boneId
+
+Test mirato: colpi dichiarati "alla testa" hanno prodotto `boneId - sessionId` = `1241`, `1237`; un colpo dichiarato "al corpo" ha dato `1239` — tutti e tre troppo vicini per essere il piccolo enum discreto (`Hitbox`: testa/torso/arti/sniper) che la formula del C# (`DamagePlayer`'s `_realBoneId`) farebbe pensare. Con questi campioni non è possibile distinguere in modo affidabile un colpo alla testa da uno al corpo tramite questo campo — stesso tipo di limite già documentato per il movimento (Fase 11): senza un disassembler non c'è modo di essere certi se l'informazione viva altrove nel pacchetto o sia calcolata solo lato client.
+
+### Sotto-tipi minori: cambio arma, ricarica, suicidio
+
+Tre `GameSub` piccoli, portati fedelmente:
+
+- **WeaponSwitch** (`155`) — registra l'arma corrente (`payload[2]`) e la ribroadcasta alla stanza, così tutti vedono il modello giusto in mano. Nessuna validazione contro l'inventario reale (il riferimento non la fa nemmeno lui — stesso client-autoritativo del movimento). Verificato dal vivo: ogni cambio arriva in coppia (stesso valore due volte, poi un flag a 0) — probabile "inizio cambio" seguito da "cambio completato".
+- **AmmoRecharge** (`105`) — solo un ack, nessuno stato da aggiornare (non teniamo conteggio munizioni per arma). Non ancora osservato in un pacchetto reale nei test dal vivo — possibile che questo client gestisca la ricarica solo via animazione, senza notificare il server.
+- **Suicide** (`157`) — una morte senza uccisore, nessun kill assegnato a nessuno. Il riferimento lo disabilita del tutto in stanze FFA/Explosive (`Room.Mode` check) — dato che le nostre stanze sono sempre internamente `mode=2` (Team_Death_Match, Fase 8) a prescindere da cosa mostri il client, quel controllo qui non blocca mai nulla in pratica. Non ancora testato dal vivo (nessun modo di invocarlo trovato nell'interfaccia del client in questa sessione).
+
+## 25. Un pomeriggio di test con due client reali: respawn, AFK, e un vicolo cieco
+
+Sessione lunga, tutta guidata da capture dal vivo con due client reali (uno locale, uno su una VM dietro la NAT dell'Hyper-V Default Switch già vista in Fase 22). Diversi bug piccoli ma reali, e un limite confermato definitivamente chiuso.
+
+### 🐛 Bug trovato: il mapping UDP della NAT scade, il client se ne accorge
+
+Sintomo riportato: il client sulla VM torna da solo alla lista server dopo diversi minuti di inattività — mai quello locale. Coerente con il timeout di default di Windows ICS (Internet Connection Sharing, l'NAT dietro l'Hyper-V Default Switch) per i mapping UDP inattivi: se per un po' non passa traffico di movimento/sparo (es. si è fermi in lobby), il mapping scade, i pacchetti UDP smettono di arrivare alla VM, e il client se ne accorge.
+
+**Fix**: un keepalive periodico (ogni 60s) che rimanda a ogni giocatore connesso — sul suo endpoint UDP già noto dall'handshake — lo stesso identico pacchetto di risposta già usato per l'handshake stesso (Fase 5). Non serve inventare un nuovo tipo di pacchetto: un mapping NAT si rinfresca con *qualunque* datagramma che passa sul flusso, non serve che il client lo capisca in modo particolare. Costo trascurabile (un pacchetto di ~65 byte a giocatore ogni 60s).
+
+### 🐛 Bug trovato: ConfirmDeath senza risposta lascia il client in attesa
+
+Come per `BackToLobby` (Fase 24), un altro sotto-tipo trattato per analogia invece che verificato: `ConfirmDeath` (154) non esiste affatto come handler nel C# di riferimento (nessun `Handlers/Game/Ingame/ConfirmDeath.cs`) — trattato inizialmente come fire-and-forget per somiglianza con `ConfirmSpawn`. Cattura reale ha smentito: senza un eco di conferma, il client aspettava qualche secondo dopo aver confermato la propria morte e poi usciva dalla stanza da solo, senza mai richiedere lo spawn. Corretto rispondendo con lo stesso payload, solo al mittente — stesso schema di conferma usato da quasi ogni altro `GameSub` implementato finora.
+
+### Rete di sicurezza: respawn automatico lato server
+
+Anche con l'eco di `ConfirmDeath`, la richiesta di `Spawn` successiva non arrivava sempre — un test ha mostrato 4/5 respawn riusciti, un altro 8/9: fallimento intermittente (10-20%), non deterministico, senza alcuna differenza nel pacchetto che mandiamo, senza errori di socket, con il TCP sempre sano (il ping continuava regolare). Invece di continuare a cercare la causa esatta lato client, aggiunta una rete di sicurezza: se un giocatore conferma la propria morte e non richiede lo spawn entro 5 secondi (e la stanza è ancora in stato Playing), il server lo rispawna comunque, costruendo e trasmettendo da solo lo stesso pacchetto `Spawn` che il client avrebbe mandato.
+
+Test successivi con la rete di sicurezza attiva hanno mostrato qualcosa di inatteso: **nessuno dei due giocatori ha più mandato una richiesta di `Spawn` propria dopo la prima morte della partita** — ogni respawn successivo, per entrambi i client (non solo quello sulla VM), è partito dal timer del server. Ipotesi più probabile: il respawn dopo la morte nel gioco vero non è mai stato pensato per essere richiesto dal client — è il server a deciderlo dopo un tempo fisso, e quello che sembrava un fallimento intermittente era in realtà il comportamento giusto, semplicemente mai implementato prima d'ora.
+
+### Non-bug: un timer anti-AFK del client, non del nostro protocollo
+
+Il dubbio finale, verificato con un test mirato: un giocatore lasciato **vivo, fermo, senza fare nulla** per il tempo necessario è comunque uscito da solo dalla stanza — dopo circa 115 secondi (~2 minuti), con la connessione perfettamente sana per tutto il tempo (ping regolare). Nessuna morte, nessun respawn in ballo: conferma che si tratta di un timer di inattività lato client, del tutto slegato dal nostro sistema di morte/respawn — un comportamento anti-AFK previsto dal client stesso, non qualcosa da correggere lato server. Spiega retroattivamente buona parte dei `ROOM_LEAVE` "misteriosi" osservati nei test precedenti: un giocatore morto che restava troppo a lungo in attesa di un respawn che tardava finiva per incappare in questo stesso timer.
+
+Per i test in solitaria (un'unica persona che segue due client), scritto un piccolo aiuto esterno al protocollo: `node/tools/anti-afk.ps1`, uno script PowerShell che ogni 45s porta brevemente in primo piano la finestra del client locale, manda un tocco di tasto movimento, e ripristina il focus precedente — tiene "sveglio" il client su cui non si sta interagendo attivamente. Non è codice del server, è uno strumento di comodo per chi testa da solo.
+
+### 🐛 Bug trovato: RoomLeave con lo slot sbagliato, e nessuna notifica a chi resta
+
+Due problemi nello stesso pacchetto, trovati testando un'uscita a metà partita con due client reali:
+
+1. **Slot sempre 0.** Il terzo campo di `RoomLeave` (`Packets/RoomLeave.cs`'s `oldSlot`) è lo slot che il giocatore uscente occupava — mandavamo sempre `0`, indipendentemente da chi uscisse davvero. Se chi usciva non era in slot 0, il client riceveva un'informazione sbagliata su chi se ne fosse andato. Anche gli ultimi due campi (XP/denaro del giocatore) erano sempre `0, 0` invece dei valori reali post-pagamento.
+2. **Nessuno lo dice a chi resta.** `Room.Remove` nel C# manda lo stesso identico pacchetto `RoomLeave` **due volte**: una al giocatore che esce, e una in broadcast a tutti quelli ancora nella stanza (`Send(pBuffer); u.Send(pBuffer);`). La nostra versione lo mandava solo a chi usciva — risultato osservato: chi restava in stanza continuava a vedere anche il giocatore che se n'era già andato nel proprio roster.
+
+Corretti entrambi: slot reale del giocatore preso dal suo stato prima di rimuoverlo dalla stanza, e broadcast aggiunta verso i membri rimasti.
+
+### 🐛 Bug trovato: nessun handler per la richiesta di RoomList
+
+Un client fuori da una stanza può richiedere di sua iniziativa un aggiornamento della lista stanze (refresh, cambio pagina) — opcode `RoomList` (`29184`, lo stesso usato per il push automatico dopo `ChannelSelection`, Fase 6), ma stavolta **come richiesta in arrivo**, mai gestita: avevamo solo il lato "lo mandiamo noi", non "il client ce lo chiede di nuovo". Il C# ha un intero `Handlers/RoomList.cs` dedicato: paginazione (calcolata come differenza tra due campi, avanti/indietro), e un filtro "solo stanze in attesa" (`waitingOnly`, le ultime 8 per ID). Implementato fedelmente, incluso il dettaglio che risponde solo se il richiedente non è già in una stanza — chi è in stanza si aggiorna tramite le broadcast dirette, non ri-richiedendo la lista.
+
+### Scoreboard live: target uccisioni e leader in tempo reale
+
+Il pacchetto `GameTick` (Fase 9) porta anche `ScoreboardA()`/`ScoreboardB()` — per FFA, rispettivamente il numero di uccisioni bersaglio e le uccisioni del giocatore in testa in quel momento. Mandavamo entrambi fissi a `0`: da qui il "000" mostrato nell'interfaccia al posto del vero obiettivo (es. 10/20/30, in base a `10 + 5×setting`, la stessa formula già usata per la condizione di vittoria). Corretto calcolando i due valori a ogni tick e passandoli nello stesso pacchetto già in onda ogni secondo — nessun nuovo pacchetto necessario.
+
+### Vicolo cieco (chiuso): il campo "round vinto" in EndGame
+
+Ultimo tentativo sul mistero win/lose in FFA (Fase 24): con la squadra vincente nota con certezza (20 uccisioni contro 5, dati confermati riga per riga nel pacchetto), sono stati provati entrambi i modi di assegnare il "round vinto" nell'header di `EndGame` — alla squadra vincente, e a quella perdente. **Risultato identico in entrambi i casi: schermata di sconfitta per tutti e due i giocatori.** Se questi due campi controllassero davvero chi vede win/lose, invertire un singolo valore avrebbe dovuto dare il risultato corretto al secondo tentativo, non lo stesso esito rotto — segno che il modello "questi due bit scelgono il vincitore" è sbagliato, non solo il segno. Rimesso `0, 0` fisso, il valore realmente inviato dal riferimento C# per FFA (`FreeForAll.CurrentRoundTeamA/B()` sono hardcoded a zero anche lì) — l'unica delle tre configurazioni provate che almeno produce un esito "pulito" (sempre squadra 0 vincente, sbagliato ma coerente) invece di un esito rotto per tutti. Il vero meccanismo che decide win/lose in FFA resta un mistero irrisolvibile senza vedere il client da dentro — stesso confine di sempre.
+
+## 26. Team Death Match: squadre vere, ticket invece di kill-target, e una scoperta grossa
+
+`room.mode` è hardcoded a `2` fin dalla Fase 8 — che nell'enum del C# è già **Team Death Match** (`Explosive=0, Free_For_All=1, Team_Death_Match=2, Conquest=3`). Fino a qui, però, tutta la logica di vittoria/scoreboard/spawn applicava sempre le formule di `Modes/FreeForAll.cs`, mai quelle di `Modes/TeamDeathMatch.cs` — un'incoerenza mai emersa finché si è testato solo FFA. Sessione lunga con due client reali per far seguire davvero a `room.mode===2` il proprio riferimento.
+
+### Condizione di vittoria: pool di "ticket" per squadra, non un target di kill individuale
+
+`Modes/TeamDeathMatch.cs`: ogni squadra parte con un pool di ticket — `Constants.TDMTickets = [30, 50, 100, 150, 200, 300]`, indicizzato da `room.setting` (lo stesso campo usato dal target-kill di FFA, riusato con significato diverso). Un'uccisione **normale** (non friendly-fire) decrementa il ticket della squadra **della vittima**, non un contatore dell'uccisore. Il round finisce quando un pool arriva a `0` o una squadra resta senza giocatori; vince chi ha più ticket rimasti — mai `Team.None` come FFA.
+
+### Friendly fire, portato per la prima volta
+
+FFA non aveva mai bisogno di controllare la squadra (`CanInFlictDamageTo`: `Attacker.Team != Victim.Team || Room.FriendlyFire || Mode == FFA` — sempre vero in FFA). TDM invece blocca il danno tra compagni a meno che `room.friendlyFire` sia attivo (già letto dal client alla creazione stanza, Fase 8 — non serviva aggiungerlo). Un'uccisione friendly-fire non passa dal normale `AddKill`/`AddDeaths` — penalizza chi ha sparato (`kills--`, `deaths++`) e non tocca nessun pool ticket, esattamente come nel C#.
+
+### 🐛 Bug trovato: le statistiche non si aggiornavano mai durante la partita
+
+Il roster della stanza (`PLAYER_INFO`, id `29952`) viene mandato **solo** quando un giocatore entra — mai più aggiornato dopo, in nessuna fase precedente. Kills/morti cambiavano nel nostro stato interno ma il client non ne veniva mai informato di nuovo. Corretto: ogni volta che un colpo uccide qualcuno (branch normale o friendly-fire), si ri-manda `PLAYER_INFO` per attaccante e vittima a tutta la stanza.
+
+### 🐛 Bug trovato: il respawn automatico faceva spawnare la squadra 1 nel posto della squadra 0
+
+Verificato con l'utente che lo spawn per squadra funzionava al primo colpo ma non ai respawn successivi. Causa: la rete di sicurezza per il respawn (Fase 25) costruiva un payload di `Spawn` **vuoto** invece di riusare quello reale mandato dal client — i campi 0-6 del payload (mai decodificati con certezza, ma evidentemente legati a squadra/classe) restavano a zero, e il client li interpretava come "squadra 0" di default. Il primo spawn di ogni round è sempre client-iniziato (payload reale, corretto); tutti i respawn successivi, in questa sessione, sono sempre partiti dalla rete di sicurezza (nessun giocatore ha mai rimandato `Spawn` da solo dopo la prima morte, osservazione già fatta in Fase 25) — quindi il bug si vedeva su ogni respawn. Corretto: il payload reale dell'ultimo spawn del giocatore viene memorizzato e riusato, aggiornando solo l'indice di spawn.
+
+### Esperimento fatto e disfatto: spawn multipli per squadra
+
+Osservazione dal vivo: in TDM lo spawn di una squadra non resta fisso in un solo punto come previsto dal C# (`TeamDeathMatch` non sovrascrive `SpawnSlot()`, eredita il `return 0;` di base). Primo tentativo: un contatore round-robin *per squadra* invece che condiviso da tutta la stanza (stesso meccanismo di FFA, isolato per team). L'esperimento si è smentito da solo: l'indice cambiava correttamente lato server (`0,1,2,3...`, verificato nei log) ma **senza alcun effetto visibile** sulla posizione mostrata dal client — segno che quel campo non è il meccanismo che sceglie il punto fisico. Rimesso a `0` fisso, fedele al riferimento; qualunque variazione visibile vicino al punto di spawn di una squadra è quasi certamente decisa dal client per conto suo.
+
+### Dati di mappa reali: bandiere e punti di spawn
+
+Domanda dell'utente: quanti spawn ha davvero una mappa in TDM? Risposta nel database di riferimento già presente nel repo (`Databases/GameServer.SQL`, tabella `map_data`, mai portata prima): ogni mappa ha un numero di "bandiere" (`flag_count`, lo stesso sistema di Conquest) e uno `flag_state` nel formato `"X-Y"` — i due indici bandiera usati come **ancore di spawn**, uno per squadra (`Room.Start()`: `Flags[spawnFlags[0]] = 0; Flags[spawnFlags[1]] = 1;`). Sono sempre e solo 2, qualunque sia il numero totale di bandiere sulla mappa. Portato `map_data` in un nuovo modulo (`node/game/maps.js`, 44 mappe caricate all'avvio) e agganciato a `Start()`: la stanza ora sa quali sono le due bandiere reali della propria mappa (loggato all'avvio round), anche se — per ora — il campo `Spawn` mandato al client resta fisso a `0` (vedi sopra) e non usa ancora queste posizioni.
+
+### 🐛 Bug trovato: un intero pacchetto mai intercettato — lo scoreboard on-demand
+
+Il tabellone che il client mostra tenendo premuto Tab **non è mai stato gestito**: è un id a sé (`Scoreboard`, `0x7550` = `30032`), non un `GameSub` dentro `GamePacket` — per questo sfuggiva a `handleGamePacket`. Cattura reale: il client manda ripetutamente `id=30032 blocks=[]` mentre Tab è premuto, mai risposto finora (silenziosamente ignorato, stesso destino di ogni id senza handler). `Handlers/Scoreboard.cs` + `Packets/Scoreboard.cs` nel C# sono completi: risposta solo se il giocatore è in una stanza in stato Playing, con lo stesso `ScoreboardA/B` di `GameTick` più una riga per giocatore (`slot, kills, morti, flags, assists+points, 0`). Implementato fedelmente — `flags` e `assists+points` mandati a `0` (nessuna delle due meccaniche esiste qui).
+
+### Limite noto: la colonna "assist" è calcolata dal client, non dal nostro dato
+
+Con `Scoreboard` finalmente risposto, kills/morti sono apparsi corretti nel tabellone — ma la colonna "assist" mostrava `-25` per un giocatore con 5 kill/0 morti e `-5` per l'altro con 0 kill/5 morti. Il campo che mandiamo per quella posizione è sempre `0` per entrambi: la matematica osservata (`-5×kills - 1×morti`, verificata su entrambe le righe) usa **solo** kills/morti che già mandiamo corretti — il client calcola quel numero per conto suo, non lo legge dal nostro pacchetto. Stesso tipo di limite già documentato per headshot e win/lose: dato coerente dal nostro lato, comportamento non influenzabile da qui.
+
+**Aggiornamento Fase 30**: la formula esatta è stata isolata con tre campioni puliti (kills/morti → assist mostrato: 2/2→-10, 1/0→-4, 0/1→-1): `assist mostrato = -4×kills - 1×morti`, non `-5×...` come stimato qui la prima volta con solo due campioni. Confermato che non dipende né dal campo "assist" né da "points" che mandiamo (entrambi provati, nessun effetto) — resta un limite lato client, non risolvibile da un pacchetto nostro.
+
+## 27. Explosive: bomba a tempo, un bug di fine-round, e la chiave del mistero win/lose
+
+Modalità Explosive (bomba piazza/disinnesca, round brevi fino a un target di round vinti) implementata e testata una prima volta in una sessione precedente contro due client reali — round giocato per intero, `Mission`/`StartRound`/`EndRound` reali confermati, ma con un bug di fine-partita noto e non ancora corretto, e il mistero win/lose (Fase 24/25) ancora aperto. Questa sessione ha chiuso entrambi.
+
+### 🐛 Bug trovato: serviva vincere due round, non uno
+
+`tickExplosive()` controllava `room.teamRounds[winner] < room.roundLimit` **prima** che l'incremento del contatore (dentro `endExplosiveRound`) avvenisse — con `roundLimit=1` la squadra doveva vincere due round prima che la partita finisse davvero. Confermato confrontando col riferimento più recente (`WarRock-ToXiiC-Core`, `Room/Modes/Explosive.cs`'s `prepareRound()`): lì l'incremento avviene *prima* del controllo, con `>=` non `<`. Stesso ordine applicato qui — verificato dal vivo, la partita ora finisce dopo esattamente un round vinto con `roundLimit=1`.
+
+### 🐛 Bug trovato: la stanza restava sempre a 5 round, mai a 1
+
+Anche dopo il fix sopra, una stanza Explosive appena creata giocava sempre a **5 round**, non a 1 come il client mostrava da solo ("single round" selezionato in automatico). Causa: `room.setting` nasceva sempre a `2` (un placeholder ereditato dai tempi in cui la stanza era sempre TDM per default, Fase 8) — e il client, verificato nei log, **non manda mai** un pacchetto `CHANGE_ROUNDS`/`CHANGE_KILLS` per una stanza Explosive mai toccata su quel campo. `ROUND_LIMITS=[1,3,5,7,9]` indicizzato da `setting=2` dà 5. Corretto il default di creazione stanza a `setting: 0` — confermato dal vivo, una stanza Explosive intonsa ora gioca davvero a 1 round.
+
+### 🐛 Bug trovato (il grosso): i campi del banner win/lose erano nel posto sbagliato del pacchetto
+
+Con round-limit e round-count finalmente corretti, un test dal vivo ha mostrato la squadra che aveva **vinto** la bomba (piazzata ed esplosa) vista come **Lose** sullo schermo — la squadra 1 come Win. Invertire i valori mandati (provato in entrambe le direzioni, come già fatto per la FFA in Fase 25) non ha cambiato nulla: stesso risultato sbagliato sia mandando i dati fedeli sia invertiti.
+
+La causa vera, trovata confrontando campo per campo `roundtimer.js` col riferimento (`Game/Packets/EndGame.cs`):
+```
+Riferimento: [OK, CurrentRoundTeamA, CurrentRoundTeamB, killsDerb, deathsDerb, killsNIU, deathsNIU, 0, 0, numGiocatori, ...]
+Nostro:      [1,  0,                0,                 killsDerb, deathsDerb, killsNIU, deathsNIU, roundA, roundB, numGiocatori, ...]
+```
+`CurrentRoundTeamA/B` — i campi che il client legge davvero per il banner — andavano in posizione 1-2, subito dopo l'OK. Il nostro codice li mandava invece in coda (posizione 7-8, dove il riferimento ha `0,0` fissi), mentre la posizione 1-2 restava sempre `0,0`. Tutti e due gli esperimenti di inversione di questa sessione — e, con ogni probabilità, anche quelli della Fase 25 sulla FFA — stavano cambiando un valore che il client non ha mai letto, perché il campo vero è sempre rimasto fermo a zero. Corretto l'ordine dei campi in `roundtimer.js`'s `endRound()`; **confermato dal vivo sia per Explosive sia per TDM**: il banner ora mostra la squadra giusta. La FFA specificamente non è stata riverificata con l'ordine corretto (il suo `Winner()` di riferimento resta comunque sempre `Team.None`, quindi il campo lì è comunque sempre `0,0` per definizione — nessun cambiamento atteso, ma da confermare).
+
+## 28. Un fantasma che restava in stanza dopo un crash, e un ping-pong per non fidarsi solo di TCP
+
+Un client è crashato durante un test — l'altro giocatore ha continuato a vederlo nel roster della stanza, come se non fosse mai uscito.
+
+### 🐛 Bug trovato: la broadcast di uscita esisteva solo per chi usciva volontariamente
+
+`removeFromRoom` (condivisa dal `close` handler del socket e dalla `ROOM_LEAVE` esplicita) puliva correttamente `room.players` e la lobby esterna, ma la **broadcast di `ROOM_LEAVE` ai giocatori rimasti nella stanza** — quella che fa sparire il giocatore dal roster degli altri, il fix della Fase 24 per l'uscita volontaria — era cablata solo dentro `handleRoomLeave`, mai nel percorso di disconnessione. Spostata dentro `removeFromRoom` stessa, così ogni via d'uscita la ottiene gratis. Confermato dal vivo: un client chiuso bruscamente ora fa sparire correttamente il giocatore dal roster dell'altro.
+
+```
+Game: socket error: read ECONNRESET
+Game: disconnected
+OUT id=30048 (EndGame)
+OUT id=29200 (RoomListUpdate)
+OUT(broadcast x1) id=29504 (RoomLeave) fields=[1, 23938, 0, 1, 0, ...]   ← nuova, il player crashato sparisce dal roster
+```
+
+### Ping-pong di liveness, per l'altro tipo di guasto
+
+Il crash sopra è stato rilevato **subito** da TCP (`ECONNRESET`) — non serviva un ping-pong per quello. Esiste però un rischio diverso, mai capitato in sessione ma reale: una connessione che muore senza generare mai un evento di chiusura lato socket (cavo staccato senza RST, NAT che silenzia il flusso). Il ping periodico già esistente (`ping.js`, ogni 5s, il client risponde già — visibile nei log come `id=25600` in ingresso, prima scartato come pacchetto sconosciuto) ora traccia l'ultimo pong ricevuto; se un utente resta muto per 20s (4 ping mancati), il server chiude forzatamente il socket, riusando lo stesso percorso di pulizia del fix sopra. Nessun nuovo pacchetto, nessun traffico aggiuntivo — solo si è iniziato ad ascoltare una risposta che il client manda già.
+
+## 29. Il vero mistero dello spawn TDM: non era una formula, era un timer troppo impaziente
+
+La Fase 26 aveva chiuso l'indagine sul punto di spawn TDM con un esperimento fallito (contatore round-robin per-squadra, nessun effetto visibile) e una conclusione provvisoria: "qualunque variazione è decisa dal client per conto suo". Questa sessione ha riaperto l'indagine con uno strumento nuovo, ed è arrivata a una risposta — ma non quella che ci si aspettava.
+
+### Uno strumento di debug live: `/spawnfields`
+
+Aggiunto un comando GM (`node/game/gm.js`, riusa il sistema comandi già esistente dalla Fase 15/23) che forza i 7 campi "mai decodificati" del payload `Spawn` (indici 0-6, quelli che finora si pensava fossero solo identità/classe del client, ininfluenti) sul prossimo respawn — nessun riavvio server richiesto tra un tentativo e l'altro:
+```
+/spawnfields <v0> <v1> <v2> <v3> <v4> <v5> <v6> | /spawnfields off
+```
+
+### 🐛 Bug trovato (crash reale): il campo "Classe" ha un range valido, e non è mai stato controllato
+
+Primo test, tutti i campi a `5`: il client **avversario è crashato**. Causa isolata: l'indice 3 del payload è `Class` (stesso nome/range del riferimento, `Handlers/Game/Ingame/Spawn.cs`, valido 0-4) — mandare `5` manda il client a cercare una classe che non esiste. Isolato con un test dedicato (indice 2 fisso, solo l'indice 3 variato): la classe da sola non influenza il punto di spawn, solo la propria validità.
+
+### La vera scoperta: l'indice 2 sceglie squadra *e* punto esatto
+
+Forzando sul respawn di un giocatore squadra 1 i valori reali osservati per squadra 0 (`[0,0,2,1,1,0,0]`), quel giocatore è comparso **sulla flag della squadra 0** — confermato anche nel verso opposto. L'indice 2 (non l'indice 7-8-9 già escluso in Fase 26) è il vero selettore. Dentro una sessione il comportamento è deterministico e ripetibile: una sessione ha mostrato un pattern palindromo pulito attorno al valore 6:
+```
+idx2=0  → squadra 0, punto A        idx2=8  → squadra 0, punto C (= idx2 4)
+idx2=2  → squadra 0, punto B        idx2=10 → squadra 0, punto B (= idx2 2)
+idx2=4  → squadra 0, punto C        idx2=12 → squadra 0, punto A (= idx2 0)
+idx2=6  → squadra 1
+```
+Ma la mappatura esatta valore→punto **non è stabile tra sessioni diverse** (stessi valori, partita diversa, punto diverso) — nessuna formula fissa trovata, solo un meccanismo confermato. Trovato anche un secondo valore pericoloso: `idx2=9`, in una sessione, ha bloccato il client in un loop di respawn (sbloccato solo disattivando l'override). Aggiunto un secondo comando, opt-in e mai automatico per non rischiare di rompere una partita vera con un valore mai verificato: `/spawncycle team0|team1 <valori idx2 già testati>|off`, che ruota solo l'indice 2 tra valori curati a mano da un GM.
+
+### La vera causa, trovata chiedendo aiuto ai riferimenti C#: nessuno dei due ha un auto-respawn lato server
+
+Un'indagine mirata su entrambi i repo C# (nessuna tabella di coordinate spawn in nessuno dei due — i punti vivono solo nei file mappa del client) ha trovato il pezzo mancante: **in nessuno dei due riferimenti esiste un auto-respawn lato server**. Ogni spawn, in ogni modalità, è sempre iniziato dal client — il server si limita a reagire. La nostra rete di sicurezza a 5 secondi (nata in Fase 25 per un caso raro di client NAT'd che sembrava non rispawnare mai da solo) non ha alcun corrispettivo nel riferimento.
+
+Test dal vivo, timer allargato temporaneamente a 30s: **il client TDM manda davvero una richiesta `Spawn` esplicita da solo, ogni volta — con un ritardo naturale di circa 19 secondi**, non i 5 che gli davamo:
+```
+morte 1: ConfirmDeath → Spawn esplicito dopo 18.9s
+morte 2: ConfirmDeath → Spawn esplicito dopo 19.5s
+morte 3: ConfirmDeath → Spawn esplicito dopo 19.4s
+```
+La rete di sicurezza a 5s **precedeva sempre** il client reale, sostituendo silenziosamente la sua scelta fresca e corretta con un payload congelato al primo spawn della partita — questo era il vero motivo per cui il punto sembrava "sempre lo stesso" (Fase 26) e, quando forzato manualmente, sembrava dipendere da una formula instabile: non si stava mai osservando il client vero. `AUTO_RESPAWN_MS` portato a **25000** (permanente, margine di sicurezza sopra i ~19s osservati) — confermato dal vivo su una partita intera: il punto di spawn ora varia naturalmente tra un respawn e l'altro, nessun override necessario.
+
+Anche il countdown di rientro che ci si aspetterebbe di vedere durante quei 19s è stato verificato: **puramente lato client**. Nessun campo inutilizzato nei pacchetti periodici di nessuno dei due riferimenti, nessun timestamp di morte su `Player`/`User`, e l'unico pacchetto dedicato a un countdown nel riferimento vecchio (`Packets/CountDown.cs`) ignora il proprio parametro e non ha mai un chiamante in tutto il repo — codice morto. Il client conosce già da solo quanto aspettare; il fix del timer è la soluzione completa, non serve implementare altro lato server.
+
+## 30. Headshot: la formula reale a 4 zone, e un indice sbagliato di uno
+
+La Fase 24 aveva lasciato l'headshot come mistero irrisolvibile (`boneId - sessionId` = 1237/1241 per colpi alla testa, 1239 al corpo — troppo vicini per un enum discreto senza un disassembler). Questa sessione ha trovato, nel riferimento vecchio, la formula completa mai letta prima (`Objects/GameMode.cs`'s `OnDamage`/`DamageCalculator`/`GetHitBoxMultiplier`, enum `Hitbox`, tabella DB `damage_multipliers`): non 3 zone ma **4**, con moltiplicatori fissi indipendenti dall'arma:
+```
+1237 testa/collo   × 1.5   (headshot: icona + statistica)
+1239 torso/arti    × 0.75  (il nostro riferimento attuale, 25 danni)
+1241 arti bassi    × 0.33  (mai gestito prima)
+1243 osso sniper   × 1.5   (stesso danno della testa, MA non conta come headshot)
+```
+Normalizzato sul torso (25, già in uso): testa 50, arti bassi 11, osso sniper 50 senza icona/statistica. Nessun bisogno di estendere il catalogo item — i moltiplicatori non dipendono dall'arma. Aggiunta anche l'esclusione del riferimento: coltelli e razzi (codici arma `DA`/`DJ`/`DK`) non contano mai come headshot, anche colpendo la zona testa.
+
+### 🐛 Bug trovato: l'icona headshot non è mai comparsa, indice sbagliato di uno
+
+Il campo che segnala l'headshot al client (`shootenPart`) veniva scritto in posizione 18 del payload — ma per un client "vecchio" (il nostro target) è la posizione **17**; 18 è l'offset giusto solo per client Nexon più recenti (`Damage.cs`'s stesso commento: "22 = Nexon - 21 = Older clients", spostato di 4 per l'offset del nostro payload). Corretto — confermato dal vivo, l'icona ora compare su un colpo alla testa.
+
+### Punto aperto: un test ha mostrato un danno che non torna
+
+Un test dal vivo (colpo al piede, poi alla testa) ha fatto sospettare all'utente che i valori fossero scambiati. Rileggendo il log dello stesso identico test, però, i numeri tornavano: primo colpo (`boneId`→arti bassi) 11 danni, secondo colpo (`boneId`→testa) 50 danni con icona — nell'ordine giusto. Non chiarito se sia stata una percezione sbagliata durante il test dal vivo o un caso genuinamente diverso mai isolato — rimandato a un test pulito con un singolo colpo isolato, salute prima/dopo controllata a vista.
+
+## 31. Invito, kick e blocco ingressi in stanza
+
+Tre feature di gestione stanza chieste esplicitamente, non ancora coperte: invitare un giocatore, espellerlo (kick), e permettere all'host di bloccare nuovi ingressi anche a stanza non piena. Nel C#, le tre aree sono trattate in modo molto diseguale — cosa che cambia come vanno lette qui:
+
+- **RoomInvite (`0x7350`)** — completo e cablato nel riferimento (`Handlers/RoomInvite.cs` + `Packets/RoomInvite.cs`): portato fedelmente, formato pacchetto incluso.
+- **Blocco ingressi (`Room.UserLimit`, GameSub `Userlimit=58`)** — anche questo completo e cablato (`Handlers/Game/Lobby/ToggleUserlimit.cs`): un toggle lato host, separato dalla capacità massima della stanza. Portato fedelmente, riusando il dispatcher `SUB`/`HANDLERS` già esistente in `gamesubs.js` (stesso pattern di `settingHandler`).
+- **RoomKick (`0x7341`)** — cablato nel riferimento ma **scheletro**: il controllo "solo il master può kickare" è vero codice, ma la `KickPlayer` del C# si limita a spedire una notifica al bersaglio — non tocca mai `Room.Players`, non riassegna `Master`, non aggiorna la lobby. La rimozione vera lato server è **lavoro nuovo, non un porting**: riusa `removeFromRoom`, la stessa funzione già condivisa da leave esplicita e disconnessione (Fase 28).
+
+### Pacchetto reale: l'invito
+
+Catturato da un test dal vivo con due sessioni (`A` crea la stanza, invita `B` per displayname):
+
+```
+OUT id=29520 fields=[Sidekick, vieni qui]
+IN  id=29520 blocks=[1, 0, -1, 3410, 3410, WRUser, -1, -1, -1, -1, 1, 18, 37765155, 3, 0, -1, vieniqui, 1, NULL]
+```
+I campi finali sono `[..., messaggio, roomId, roomPassword]`: l'id e la password della stanza viaggiano in chiaro dentro l'invito stesso, così il client può precompilare il join — non esiste un vero handshake di accettazione, l'invitato fa semplicemente un normale `RoomJoin` (`0x7310`) con quei due valori.
+
+### 🐛 Non-bug trovato in fase di test: l'invito va per displayname, non per username di login
+
+Il primo tentativo di test ha invitato `wruser2` (l'username usato per il login) e non è arrivato nulla al destinatario. Causa: il riferimento cerca per `Displayname`, che è un campo separato assegnato dal server (`Sidekick`, non `wruser2` — visibile nel pacchetto di login, campo 5). Comportamento corretto, non un bug: un client reale che digita "invita" seleziona sempre il displayname mostrato in lobby, mai lo username di login, quindi la ricerca per displayname è quella giusta da portare. Annotato qui solo perché ha fatto perdere tempo in test.
+
+### RoomKick: la rimozione vera, verificata dal vivo
+
+```
+A → kick slot 8
+OUT id=29505 fields=[8]                                    ← notifica al bersaglio (formato reference)
+IN(B) id=29505 blocks=[1, 8]
+OUT(broadcast x1) id=29504 fields=[1, 25827, 8, 1, 0, ...]  ← ROOM_LEAVE ai rimasti, via removeFromRoom
+```
+B riceve la notifica di kick (porta fedele del wire format C#) *e* viene davvero rimosso dalla stanza server-side: roster aggiornato, `room.master` resettato, lobby avvisata — nessuno di questi passaggi esiste nel riferimento, sono la parte "inventata" dichiarata sopra.
+
+### Blocco ingressi: differenziato dalla capacità piena
+
+```
+A → lock (GameSub 58)
+IN(A) id=30000 blocks=[1, 0, 1, 2, 58, 0, 0, 1]   ← payload[2]=1, room.userLimit=true
+B → join stanza bloccata
+IN(B) id=29456 blocks=[94060]                     ← UsersExceeded, non 94120 (RoomIsFull)
+```
+Stesso codice errore del riferimento (`Packets/RoomJoin.cs`'s `ErrorCodes.UsersExceeded`): un client reale può distinguere "stanza piena" da "host ha chiuso gli ingressi" solo se i due codici restano diversi.
+
+## Stato finale
+
+Login → lobby → stanze (con pulizia alla disconnessione, anche a metà partita e anche per un client crashato, non solo per un'uscita volontaria; invito a un giocatore per displayname, kick dal master con rimozione server-side reale — non solo la notifica del riferimento —, e blocco ingressi lato host separato dalla capacità massima) → chat (inclusa chat di clan) → squadre → equipaggiamento reale (posseduto, salvato) → shop funzionante → coupon funzionanti → avvio partita → spawn dinamico e corretto in ogni modalità (FFA round-robin; TDM lasciato scegliere al client, che lo fa da solo con un ritardo naturale di ~19s) → relay UDP di movimento/sparo (offset di posizione e salute confermati numericamente contro un valore reale indipendente) → danno/morte/respawn con conteggio uccisioni, friendly fire vero in TDM, headshot rilevato e classificato su 4 zone (formula reale del riferimento, non solo un'ipotesi), rete di sicurezza a 25s per il solo caso limite (mai più il percorso normale) → **fine round con condizione di vittoria per modalità (kill-target FFA / pool ticket TDM / round-limit Explosive), banner win/lose corretto (bug di posizionamento campo risolto), scoreboard live sia passivo (GameTick) sia on-demand (tasto Tab), pacchetto EndGame, ritorno alla lobby della stanza** → modalità Explosive completa (bomba, round, fine partita corretta) → dati di mappa reali (bandiere/spawn-anchor per squadra) → livelli/XP persistenti → tier premium reali con scadenza gestita in tempo reale → clan minimale, con clan war → comandi GM da chat (livello, denaro, premium, strumenti di debug spawn, gmhelp) → ping-pong di liveness oltre al semplice TCP → notifiche di presenza batched → server raggiungibile da qualunque rete (non solo localhost, con keepalive UDP per i client dietro NAT), con due client reali contemporanei verificati end-to-end su più cicli di partita completi, su FFA, TDM ed Explosive. L'intero percorso che un giocatore compie dall'apertura del client a una partita giocata per intero — morte, respawn, fine round, ritorno alla lobby — funziona verificato dal vivo con **due client reali**, non solo client finti.
+
+Quello che resta genuinamente fuori portata senza strumenti più profondi: la formula danno *reale* per arma (non più i moltiplicatori hitbox, quelli sono noti e portati — serve estendere il catalogo item con `Power`/`PowerPersonal` e portare la vita a 1000, Fase 30), il meccanismo esatto che decide la schermata win/lose in **FFA** specificamente (il bug di posizionamento campo che ha risolto Explosive e TDM, Fase 27, non è stato ancora riverificato lì dal vivo — ma per la FFA quel campo è comunque sempre `0,0` per definizione nel riferimento), e la colonna "assist" dello scoreboard (formula del client isolata con precisione — `-4×kills - 1×morti`, Fase 26/30 — ma non pilotabile da nessun campo nostro). La mappatura esatta valore→punto di spawn TDM (campo 2 del payload `Spawn`) resta senza una formula fissa tra sessioni diverse, ma non è più un problema pratico dalla Fase 29: lasciando che sia il client a sceglierla da solo (rispettando il suo tempo naturale invece di precederlo con un fallback), i punti sono corretti di default. Modalità Conquest, veicoli e artiglieria restano territorio non ancora esplorato.
+
+Il sistema di clan, in particolare, è ancora da validare a fondo con il client reale su ogni sotto-funzione: essendo stato progettato da zero (nessun riferimento C# da confrontare), è possibile che alcune sotto-azioni si aspettino un formato di risposta diverso da quello scelto qui.

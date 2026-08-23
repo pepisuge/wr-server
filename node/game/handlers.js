@@ -1,7 +1,8 @@
 const { users } = require('./state');
-const { handleRoomCreation, handleRoomJoin, handleRoomLeave, removeFromRoom, sendRoomList, ROOM_CREATION, ROOM_JOIN, ROOM_LEAVE } = require('./rooms');
+const { handleRoomCreation, handleRoomJoin, handleRoomLeave, handleRoomListRequest, handleRoomKick, handleRoomInvite, removeFromRoom, sendRoomList, ROOM_CREATION, ROOM_JOIN, ROOM_LEAVE, ROOM_KICK, ROOM_INVITE, ROOM_LIST } = require('./rooms');
 const { handleChat, CHAT } = require('./chat');
-const { handleGamePacket, GAME_PACKET } = require('./gamesubs');
+const { handleGamePacket, GAME_PACKET, handleScoreboardRequest, SCOREBOARD } = require('./gamesubs');
+const { handleExplosivesPacket, EXPLOSIVES } = require('./explosive');
 const { handleEquipment, EQUIPMENT } = require('./equipment');
 const { loadUserDetails, effectivePremium, levelForXp } = require('./progression');
 const { CLAN_SYSTEM, handleClanSystem, clanInfo } = require('./clan');
@@ -9,6 +10,7 @@ const { handleUserList, announceJoin, announceLeave, USER_LIST } = require('./us
 const { handleItemshop, ITEMSHOP } = require('./shop');
 const { loadUserInventory, loadUserEquipment, buildItemlist, buildSlotState } = require('./inventory');
 const { loadRedeemedCoupons, handleCoupon, COUPON } = require('./coupon');
+const { handlePingReply, PING } = require('./ping');
 
 const SERVER_TIME = 0x6100;
 const AUTHORIZATION = 0x6200;
@@ -76,8 +78,13 @@ function createHandlers(db) {
 
   // Ported from Game/Handlers/Authorization.cs + Game/Packets/Authorization.cs.
   // ponytail: doesn't validate sessionId against the Auth server yet (no
-  // PlayerAuthorization round-trip) - trusts whatever the client sends. Add
-  // real session validation once accounts need to be distrusted.
+  // PlayerAuthorization round-trip, no Session/Activate state machine the
+  // reference builds for that) - trusts whatever the client sends. What it
+  // does check is the actual complaint that mattered here: the same account
+  // connected twice at once. That's a single Map scan keyed by userId,
+  // cheaper than porting the reference's two-server session handshake for
+  // the same guarantee. Add the full round-trip if sessionId spoofing itself
+  // becomes a real concern.
   async function handleAuthorization(socket, pkt) {
     const userId = Number(pkt.blocks[0]);
     const username = pkt.blocks[2] || '';
@@ -89,6 +96,14 @@ function createHandlers(db) {
       socket.sendPacket(AUTHORIZATION, [73030]); // NormalProcedure
       socket.end();
       return;
+    }
+
+    for (const existing of users.values()) {
+      if (existing.id === userId) {
+        socket.sendPacket(AUTHORIZATION, [92040]); // IdInUse
+        socket.end();
+        return;
+      }
     }
 
     // Fase 5/6: real xp/money/premium from user_details, row created with
@@ -144,9 +159,11 @@ function createHandlers(db) {
       clanRank,
       isGm: !!Number(row.is_gm),
       userListPage: 0,
+      roomListPage: 0,
       inventory,
       equipment,
       redeemedCoupons,
+      lastPong: Date.now(), // ping.js's liveness timeout baseline
     };
     users.set(sessionId, socket.user);
     announceJoin();
@@ -178,12 +195,18 @@ function createHandlers(db) {
     [ROOM_CREATION]: handleRoomCreation,
     [ROOM_JOIN]: handleRoomJoin,
     [ROOM_LEAVE]: (socket) => handleRoomLeave(socket, db),
+    [ROOM_KICK]: (socket, pkt) => handleRoomKick(socket, pkt, db),
+    [ROOM_INVITE]: handleRoomInvite,
+    [ROOM_LIST]: handleRoomListRequest,
     [CHAT]: (socket, pkt) => handleChat(socket, pkt, db),
-    [GAME_PACKET]: handleGamePacket,
+    [GAME_PACKET]: (socket, pkt) => handleGamePacket(socket, pkt, db),
+    [SCOREBOARD]: handleScoreboardRequest,
+    [EXPLOSIVES]: handleExplosivesPacket,
     [EQUIPMENT]: handleEquipment(db),
     [CLAN_SYSTEM]: handleClanSystem(db),
     [ITEMSHOP]: handleItemshop(db),
     [COUPON]: handleCoupon(db),
+    [PING]: handlePingReply,
   };
 }
 

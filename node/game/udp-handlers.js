@@ -66,7 +66,6 @@ function handlePingHandshake(socket, msg, rinfo) {
   const localEndpoint = readEndpoint(msg, 32);
 
   const u = users.get(sessionId);
-  if (u) u.udpEndpoint = { address: rinfo.address, port: rinfo.port };
 
   const response = Buffer.alloc(65);
   msg.copy(response, 0, 0, Math.min(msg.length, 65));
@@ -76,6 +75,34 @@ function handlePingHandshake(socket, msg, rinfo) {
   writeEndpoint(response, 32, rinfo.address, rinfo.port);
   writeEndpoint(response, 50, localEndpoint.ip, localEndpoint.port);
   socket.send(response, rinfo.port, rinfo.address);
+
+  // Cached so startUdpKeepalive() can resend this exact, already-valid reply
+  // on its own timer - it's what keeps a NAT'd client's UDP mapping alive
+  // between real movement/combat packets (see the keepalive doc comment).
+  if (u) {
+    u.udpEndpoint = { address: rinfo.address, port: rinfo.port };
+    u.udpKeepaliveSocket = socket;
+    u.udpKeepaliveMsg = response;
+  }
+}
+
+// A client behind NAT (e.g. a VM on Hyper-V's Default Switch) has its UDP
+// mapping torn down by the NAT after a few idle minutes - fine while a match
+// keeps a steady stream of movement/combat UDP flowing, but during lobby
+// idle time nothing goes over UDP at all, the mapping expires, and the
+// client eventually decides the connection is dead and bails to the server
+// list. NAT mappings refresh on *any* datagram matching the flow, in either
+// direction - so periodically resending the same handshake reply already
+// cached above is enough, no need to construct a new packet type the client
+// has to specially understand.
+const KEEPALIVE_MS = 60000;
+function startUdpKeepalive() {
+  setInterval(() => {
+    for (const u of users.values()) {
+      if (!u.udpEndpoint || !u.udpKeepaliveSocket) continue;
+      u.udpKeepaliveSocket.send(u.udpKeepaliveMsg, u.udpEndpoint.port, u.udpEndpoint.address);
+    }
+  }, KEEPALIVE_MS);
 }
 
 // Ported from the `else if (packet[14] == 0x10 || ...)` branch of
@@ -114,4 +141,4 @@ function handleUdpPacket(socket, msg, rinfo, port) {
   console.log(`UDP:${port} unhandled type=0x${type.toString(16)} from ${rinfo.address}:${rinfo.port}`);
 }
 
-module.exports = { handleUdpPacket };
+module.exports = { handleUdpPacket, startUdpKeepalive };

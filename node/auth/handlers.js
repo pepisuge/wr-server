@@ -17,6 +17,16 @@ function isAlphaNumeric(s) {
   return /^[a-zA-Z0-9]+$/.test(s);
 }
 
+// The address a game server config.json ships with is meaningless once
+// clients connect from more than one network (localhost test, LAN, a VM's
+// virtual switch, ...): whatever address the client used to reach *this*
+// socket is, by definition, an address that reaches this host - auth and
+// game listen on all interfaces of the same machine, so it reaches game too.
+function localIp(socket) {
+  const addr = socket.localAddress || '';
+  return addr.startsWith('::ffff:') ? addr.slice(7) : addr;
+}
+
 function sha256(str) {
   return crypto.createHash('sha256').update(str, 'ascii').digest('hex');
 }
@@ -71,7 +81,8 @@ function createHandlers(db) {
     // list when we included it - dropped until we confirm what this client
     // actually expects at this position.
     const fields = [1, user.id, 0, username, 'NULL', user.displayname, sessionId, 1, 0, user.status, servers.length];
-    for (const s of servers) fields.push(s.id, s.name, s.ip, PORTS.game, s.playerCount, s.type);
+    const gameIp = localIp(socket);
+    for (const s of servers) fields.push(s.id, s.name, gameIp, PORTS.game, s.playerCount, s.type);
     fields.push(-1, -1, -1, -1, 0, 0);
 
     socket.sendPacket(SERVER_LIST, fields);

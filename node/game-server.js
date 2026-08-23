@@ -6,12 +6,13 @@ const { wrapSocket, sendGreeting } = require('./lib/xor-socket');
 const { PORTS, XOR } = require('./lib/constants');
 const { connectToAuthServer } = require('./game/internal-client');
 const { createHandlers } = require('./game/handlers');
-const { handleUdpPacket } = require('./game/udp-handlers');
+const { handleUdpPacket, startUdpKeepalive } = require('./game/udp-handlers');
 const { loadGameConfig } = require('./game/progression');
 const { startPingLoop } = require('./game/ping');
 const { loadClans } = require('./game/clan');
 const { loadItems } = require('./game/items');
 const { loadCoupons } = require('./game/coupon');
+const { loadMaps } = require('./game/maps');
 
 function logPacket(label, pkt) {
   console.log(`${label} tick=${pkt.tick} id=${pkt.id} blocks=[${pkt.blocks.join(', ')}]`);
@@ -25,6 +26,7 @@ async function main() {
   await loadClans(db);
   await loadItems(db);
   await loadCoupons(db);
+  await loadMaps(db);
 
   const handlers = createHandlers(db);
   const gameListener = net.createServer((socket) => {
@@ -51,6 +53,7 @@ async function main() {
 
   connectToAuthServer(config.game);
   startPingLoop(db);
+  startUdpKeepalive();
 }
 
 main().catch((err) => {

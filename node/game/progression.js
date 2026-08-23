@@ -56,14 +56,28 @@ function premiumXpBonus(premium) {
 }
 
 // gameconfig table - loaded once at boot (Game/GameConfig.cs's pattern),
-// mutated in place so callers holding a reference see updates.
-const GameConfig = { expRate: 1, dinarRate: 1, levelUpMoneyReward: 25000 };
+// mutated in place so callers holding a reference see updates. bombTime/
+// explosiveRoundTime/allowStartAlone are Explosive mode's (Fase 27) -
+// GameConfig.cs's own defaults if the DB row is somehow missing them.
+const GameConfig = {
+  expRate: 1,
+  dinarRate: 1,
+  levelUpMoneyReward: 25000,
+  bombTime: 45000,
+  explosiveRoundTime: 180000,
+  allowStartAlone: false,
+};
 async function loadGameConfig(db) {
-  const [rows] = await db.query('SELECT exprate, dinarrate, levelup_base_reward FROM gameconfig LIMIT 1');
+  const [rows] = await db.query(
+    'SELECT exprate, dinarrate, levelup_base_reward, bombtime, explosivetime, allow_start_alone FROM gameconfig LIMIT 1'
+  );
   if (rows[0]) {
     GameConfig.expRate = Number(rows[0].exprate) || 1;
     GameConfig.dinarRate = Number(rows[0].dinarrate) || 1;
     GameConfig.levelUpMoneyReward = Number(rows[0].levelup_base_reward) || 25000;
+    GameConfig.bombTime = Number(rows[0].bombtime) || 45000;
+    GameConfig.explosiveRoundTime = Number(rows[0].explosivetime) || 180000;
+    GameConfig.allowStartAlone = !!rows[0].allow_start_alone;
   }
 }
 
@@ -108,15 +122,13 @@ function checkPremiumExpiry(db, user, nowSeconds = Math.floor(Date.now() / 1000)
   return true;
 }
 
-// Ported from Player.cs's scoring branch + User.cs's EndGame(). Points is
-// always 0 here - no kill/death tracking exists yet (see gamesubs.js), so
-// this awards the flat base XP/money the formula gives at 0 points, which
-// is the one part of "ending a match" this server can currently be honest
-// about. Persists xp+money to DB (the reference only persists money from
-// this path - persisting xp too is a deliberate fix, otherwise levels would
-// never survive a restart).
-function applyMatchEnd(db, user) {
-  const points = 0;
+// Ported from Player.cs's scoring branch + User.cs's EndGame(). points
+// defaults to 0 (a mid-match room-leave with no kills to show for it);
+// roundtimer.js's endRound() passes real kill counts now that those exist
+// (see gamesubs.js's PlayerDamage). Persists xp+money to DB (the reference
+// only persists money from this path - persisting xp too is a deliberate
+// fix, otherwise levels would never survive a restart).
+function applyMatchEnd(db, user, points = 0) {
   const expRate = 1 + premiumXpBonus(user.premium);
   const dinarRate = 1;
 

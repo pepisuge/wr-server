@@ -5,20 +5,23 @@
 // any client-supplied field - the client's own Authorization packet carries
 // an AccessLevel byte, but nothing here validates it, so it can't be used
 // to grant GM powers safely.
-const { users } = require('./state');
+const { users, getChannel } = require('./state');
 const { xpForLevel } = require('./progression');
 
 const CHAT = 0x7400;
 // Game/Enums/ChatType.cs - Notice1/Notice2 are what Cristina (the reference's
-// virtual assistant) uses to talk to a player, via the exact same
-// "string name, sessionId=0" Chat constructor overload used below - not a
-// guess, ported straight from Game/Cristina/Modules/Chat.cs. The plain
-// WHISPER type tried first never rendered in the real client; this is the
-// one actually meant for "the server is talking to you" messages.
-const NOTICE = 1;
+// virtual assistant) uses to talk to a player. An earlier WHISPER attempt
+// left the target sessionId/name fields blank (0/'NULL') and never rendered;
+// a real whisper-to-you packet always carries the *recipient's own*
+// sessionId/displayname in those fields (see chat.js's TYPE.WHISPER target
+// send), so that's the likely reason. Switched to WHISPER with those fields
+// filled in - it's the only type that shows up as a normal chat line instead
+// of a popup/notice.
+const WHISPER = 6;
 
 function reply(socket, text) {
-  socket.sendPacket(CHAT, [1, 0, 'GM', NOTICE, 0, 'NULL', `GM>> ${text}`]);
+  const u = socket.user;
+  socket.sendPacket(CHAT, [1, 0, 'GM', WHISPER, u.sessionId, u.displayname, `GM>> ${text}`]);
 }
 
 // Level/money changes only show up in the client's own UI from data it
@@ -136,20 +139,82 @@ async function cmdSetPremium(socket, db, args) {
   reply(socket, `Premium di ${label} impostato a tier ${tier} per ${days > 0 ? `${days} giorni` : 'senza scadenza pratica'}.`);
 }
 
+// Investigation tool, not a ported reference command: forces fields 0-6 of
+// the next auto-respawn Spawn packet (gamesubs.js's scheduleAutoRespawn) to
+// whatever's given here instead of the client's own real values, so the
+// TDM spawn-point mystery can be probed live - change the values, wait for
+// a death+5s, look, repeat - no server restart needed between tries.
+function cmdSpawnFields(socket, db, args) {
+  const u = socket.user;
+  const room = u.roomId !== null ? getChannel(u.channel).rooms.get(u.roomId) : null;
+  if (!room) return reply(socket, 'Devi essere in una stanza.');
+
+  if ((args[0] || '').toLowerCase() === 'off') {
+    room.spawnTestFields = null;
+    return reply(socket, 'Override spento - i respawn tornano a usare i valori reali del client.');
+  }
+
+  const values = args.slice(0, 7).map(Number);
+  if (values.length !== 7 || values.some((n) => !Number.isFinite(n))) {
+    return reply(socket, 'Uso: /spawnfields <v0> <v1> <v2> <v3> <v4> <v5> <v6> | /spawnfields off');
+  }
+  room.spawnTestFields = values;
+  reply(socket, `Override attivo: [${values.join(', ')}] - verrà usato al prossimo auto-respawn nella stanza.`);
+}
+
+// Opt-in variety, not a real fix: rotates ONLY idx2 (the field confirmed to
+// pick the point - see /spawnfields' investigation) through a GM-curated
+// list, per team, leaving every other field (class etc.) as the player's
+// own real value. Deliberately doesn't guess new values on its own -
+// wrong ones have been observed to crash the client outright or lock it in
+// a respawn loop, and which values are safe isn't stable session to
+// session, so this only ever uses whatever a GM has already manually
+// verified in *this* session via /spawnfields. Off by default, never
+// affects a room unless explicitly turned on.
+function cmdSpawnCycle(socket, db, args) {
+  const u = socket.user;
+  const room = u.roomId !== null ? getChannel(u.channel).rooms.get(u.roomId) : null;
+  if (!room) return reply(socket, 'Devi essere in una stanza.');
+
+  if ((args[0] || '').toLowerCase() === 'off') {
+    room.spawnCycle = null;
+    return reply(socket, 'Ciclo spawn disattivato.');
+  }
+
+  const team = { team0: 0, team1: 1 }[(args[0] || '').toLowerCase()];
+  const values = args.slice(1).map(Number);
+  if (team === undefined || values.length === 0 || values.some((n) => !Number.isFinite(n))) {
+    return reply(socket, 'Uso: /spawncycle team0|team1 <valori idx2 già verificati sicuri...> | /spawncycle off');
+  }
+  room.spawnCycle = room.spawnCycle || {};
+  room.spawnCycle[team] = { values, index: 0 };
+  reply(socket, `Ciclo attivo per team${team}: [${values.join(', ')}] - un valore diverso a ogni respawn di quella squadra.`);
+}
+
+// Named /gmhelp, not /help - the client itself intercepts "/help" locally
+// (shows its own built-in command list, never reaches the server as chat).
 function cmdHelp(socket) {
   reply(
     socket,
     '/setlevel <giocatore|id> <livello 1-100> | /addmoney <giocatore|id> <importo> | ' +
-      '/setpremium <giocatore|id> <tier 0-4> <giorni> | /help'
+      '/setpremium <giocatore|id> <tier 0-4> <giorni> | /spawnfields <7 valori>|off | ' +
+      '/spawncycle team0|team1 <valori>|off | /gmhelp'
   );
 }
 
-const COMMANDS = { setlevel: cmdSetLevel, addmoney: cmdAddMoney, setpremium: cmdSetPremium, help: cmdHelp };
+const COMMANDS = {
+  setlevel: cmdSetLevel,
+  addmoney: cmdAddMoney,
+  setpremium: cmdSetPremium,
+  spawnfields: cmdSpawnFields,
+  spawncycle: cmdSpawnCycle,
+  gmhelp: cmdHelp,
+};
 
 function handleGmCommand(socket, db, text) {
   const [name, ...args] = text.slice(1).split(' ').filter(Boolean);
   const cmd = COMMANDS[(name || '').toLowerCase()];
-  if (!cmd) return reply(socket, `Comando sconosciuto: ${name || ''}. Usa /help.`);
+  if (!cmd) return reply(socket, `Comando sconosciuto: ${name || ''}. Usa /gmhelp.`);
 
   // Guard once here, not per-command: an unexpected error (bad DB input,
   // etc.) must never crash the whole process over one chat message - it did
