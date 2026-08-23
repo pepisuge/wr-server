@@ -13,6 +13,7 @@ const { loadClans } = require('./game/clan');
 const { loadItems } = require('./game/items');
 const { loadCoupons } = require('./game/coupon');
 const { loadMaps } = require('./game/maps');
+const { setAuthDb } = require('./game/gm');
 
 function logPacket(label, pkt) {
   console.log(`${label} tick=${pkt.tick} id=${pkt.id} blocks=[${pkt.blocks.join(', ')}]`);
@@ -22,6 +23,14 @@ async function main() {
   const db = createPool(config.game.db);
   await db.query('SELECT 1');
   console.log('Game server: DB ok.');
+
+  // /ban and /unban (gm.js) mutate the auth DB's users.status - the same
+  // column auth/handlers.js already checks at login - so the game process
+  // needs its own small connection there too, separate from the `db` pool
+  // above (which only ever points at the game DB, wres2).
+  const authDb = createPool(config.auth.db);
+  await authDb.query('SELECT 1');
+  setAuthDb(authDb);
   await loadGameConfig(db);
   await loadClans(db);
   await loadItems(db);

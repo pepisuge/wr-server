@@ -85,7 +85,7 @@ async function loadGameConfig(db) {
 // with the reference's defaults (money=50000) on first game-server login.
 async function loadUserDetails(db, userId) {
   const [rows] = await db.query(
-    'SELECT xp, money, kills, deaths, premium, premium_expiredate, clanid, clanrank, is_gm FROM user_details WHERE id = ?',
+    'SELECT xp, money, kills, deaths, premium, premium_expiredate, clanid, clanrank, is_gm, mutedexpire FROM user_details WHERE id = ?',
     [userId]
   );
   if (rows[0]) return rows[0];

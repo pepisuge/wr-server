@@ -49,6 +49,15 @@ function handleChat(socket, pkt, db) {
   // just sends it as ordinary chat text instead of being silently eaten.
   if (u.isGm && text.startsWith('/')) return handleGmCommand(socket, db, text);
 
+  // Muted players are cut off before any TYPE branch runs (so it also blocks
+  // whispers/clan chat, not just room/lobby) - GM commands above already
+  // returned by this point, so a muted GM can still run /unmute on themself.
+  if (u.mutedexpire > Math.floor(Date.now() / 1000)) {
+    const minutesLeft = Math.ceil((u.mutedexpire - Date.now() / 1000) / 60);
+    socket.sendPacket(CHAT, [1, 0, 'System', TYPE.WHISPER, u.sessionId, u.displayname, `System>> Sei silenziato ancora per ${minutesLeft} minuti.`]);
+    return;
+  }
+
   const fields = [1, u.sessionId, u.displayname, type, targetId, targetName, message];
 
   switch (type) {

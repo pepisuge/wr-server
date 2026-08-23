@@ -21,4 +21,8 @@ function getMap(id) {
   return MAPS.get(Number(id));
 }
 
-module.exports = { loadMaps, getMap };
+function listMaps() {
+  return [...MAPS.values()];
+}
+
+module.exports = { loadMaps, getMap, listMaps };

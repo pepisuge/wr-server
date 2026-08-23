@@ -158,6 +158,7 @@ function createHandlers(db) {
       clanId,
       clanRank,
       isGm: !!Number(row.is_gm),
+      mutedexpire: Number(row.mutedexpire) || 0,
       userListPage: 0,
       roomListPage: 0,
       inventory,
