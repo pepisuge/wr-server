@@ -17,6 +17,12 @@ const TDM_MODE = 2;
 // Modes/TeamDeathMatch.cs's Constants.TDMTickets, indexed by room.setting.
 const TDM_TICKETS = [30, 50, 100, 150, 200, 300];
 
+// GameConfig.MaxTeamDifference's compiled-in default (Game/GameConfig.cs) -
+// how unbalanced the two teams may be for a team-based mode to start. FFA
+// has no teams so it's exempt (matches Start.cs's `Room.Mode == Free_For_All`
+// escape hatch).
+const MAX_TEAM_DIFFERENCE = 1;
+
 // GameSubs ids, ported from Game/Enums/GameSubs.cs - the numbers that live
 // inside a GamePacket, not top-level packet ids.
 const SUB = {
@@ -89,13 +95,21 @@ function handleSideUpdate(room, player, payload) {
 }
 
 // Ported from Game/Handlers/Game/Lobby/Start.cs. Skips the AccessLevel/
-// AllowStartAlone override and the team-balance check - just "everyone
-// ready, at least 2 players". Doesn't actually load a map (no MapManager
-// yet) - just flips the room to Playing so the client moves on.
+// AllowStartAlone override - just "everyone ready, at least 2 players,
+// teams balanced within MAX_TEAM_DIFFERENCE for team-based modes" (a room
+// where every player sits on the same team, e.g. Explosive/TDM, is exactly
+// what this blocks - FFA has no teams and is exempt). Doesn't actually load
+// a map (no MapManager yet) - just flips the room to Playing so the client
+// moves on.
 function handleStart(room, player, payload, u, db) {
   if (player.slot !== room.master || room.state !== 1) return null;
   const players = [...room.players.values()];
   if (!players.every((p) => p.ready) || players.length < 2) return null;
+  if (room.mode !== FFA_MODE) {
+    const team0 = players.filter((p) => p.team === 0).length;
+    const team1 = players.filter((p) => p.team === 1).length;
+    if (Math.abs(team0 - team1) > MAX_TEAM_DIFFERENCE) return null;
+  }
 
   // Fresh round: clear last round's health/kills/deaths (Player.Reset/RoundStart).
   for (const p of players) {
