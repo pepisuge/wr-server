@@ -195,7 +195,7 @@ function createHandlers(db) {
     [ROOM_CREATION]: handleRoomCreation,
     [ROOM_JOIN]: handleRoomJoin,
     [ROOM_LEAVE]: (socket) => handleRoomLeave(socket, db),
-    [ROOM_KICK]: (socket, pkt) => handleRoomKick(socket, pkt, db),
+    [ROOM_KICK]: handleRoomKick,
     [ROOM_INVITE]: handleRoomInvite,
     [ROOM_LIST]: handleRoomListRequest,
     [CHAT]: (socket, pkt) => handleChat(socket, pkt, db),

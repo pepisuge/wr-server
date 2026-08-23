@@ -475,12 +475,18 @@ function handleRoomListRequest(socket, pkt) {
 // Ported from Game/Handlers/RoomKick.cs's wire format and host-only check
 // (Room.Master == Player.Id, i.e. the same "master = slot" convention
 // removeFromRoom's comment already flags as the only host tracking this
-// codebase has). The reference's own KickPlayer only sends the notice and
-// never touches server-side room state (no Players.TryRemove, no Master
-// reassignment, no lobby update) - that half is a stub, not something to
-// copy, so the actual removal below reuses removeFromRoom instead: the same
-// function an explicit leave or a dropped connection already goes through.
-function handleRoomKick(socket, pkt, db) {
+// codebase has). Looked like a stub at first read - KickPlayer only ever
+// sends this one notice, never touches Room.Players/Master/lobby - but a
+// live capture against the real client showed why that's enough: the kicked
+// client reacts to this notice by sending its own explicit RoomLeave right
+// away, which already runs the real removal (removeFromRoom, below). Calling
+// removeFromRoom *here* too was the actual bug this shipped with: it raced
+// ahead of that RoomLeave, so by the time it arrived u.roomId was already
+// null, handleRoomLeave's guard silently swallowed it with no reply packet
+// at all, and the real client crashed waiting on one (ECONNRESET right
+// after). Reference behavior, once you watch the real client obey it, was
+// already complete - notify only, let the client's own leave do the rest.
+function handleRoomKick(socket, pkt) {
   const u = socket.user;
   if (!u || u.roomId === null) return;
 
@@ -497,7 +503,6 @@ function handleRoomKick(socket, pkt, db) {
   if (!targetUser) return;
 
   targetUser.socket.sendPacket(ROOM_KICK, [1, targetSlot]);
-  removeFromRoom(db, targetUser);
 }
 
 const ROOM_INVITE_ERR = { INVITED: 93010, GENERIC: 93020, IN_ROOM: 93030 };
