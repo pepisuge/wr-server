@@ -275,10 +275,26 @@ function handleRoomJoin(socket, pkt) {
   const u = socket.user;
   if (!u || u.roomId !== null) return;
 
-  const roomId = Number(pkt.blocks[0]);
+  // roomId=0 is what the real client sends when accepting an invite from its
+  // popup (found via a live marker test - it never echoes back the real room
+  // id/password we send in the invite payload for this field, always 0) -
+  // it's a fixed client-side value for that action, not the real room. Room
+  // ids are 0-based here (matching both C# references), so 0 can also be a
+  // real room now - try it literally first (a direct click on room 0 in the
+  // list must still work), and only fall back to whichever room
+  // handleRoomInvite last remembered inviting this user to (u.pendingInviteRoomId)
+  // if room 0 doesn't actually exist. Still ambiguous in the narrow case
+  // where room 0 is genuinely occupied at the same time as a pending invite
+  // to a different room - unresolved without a live test telling the two
+  // apart some other way.
+  let roomId = Number(pkt.blocks[0]);
   const password = pkt.blocks[1] || '';
   const chan = getChannel(u.channel);
-  const room = chan.rooms.get(roomId);
+  let room = chan.rooms.get(roomId);
+  if (!room && roomId === 0 && u.pendingInviteRoomId) {
+    roomId = u.pendingInviteRoomId;
+    room = chan.rooms.get(roomId);
+  }
 
   if (!room) {
     socket.sendPacket(ROOM_JOIN, [94010]); // GenericError
@@ -431,7 +447,7 @@ function handleRoomLeave(socket, db) {
 function sendRoomList(socket, page) {
   const u = socket.user;
   const chan = getChannel(u.channel);
-  const rooms = [...chan.rooms.values()].filter((r) => Math.floor((r.id - 1) / 8) === page);
+  const rooms = [...chan.rooms.values()].filter((r) => Math.floor(r.id / 8) === page);
   const fields = [rooms.length, page, 0];
   for (const r of rooms) fields.push(...roomInfoFields(r));
   socket.sendPacket(ROOM_LIST, fields);
@@ -507,12 +523,18 @@ function handleRoomKick(socket, pkt) {
 
 const ROOM_INVITE_ERR = { INVITED: 93010, GENERIC: 93020, IN_ROOM: 93030 };
 
-// The 19-field invite payload sent to the target, field order lifted from
-// Packets/RoomInvite.cs: [1, 0, -1, sessionId, sessionId (again - "Ping ?!"
-// per the reference's own comment), displayname, 4 clan fields, 1, 18, xp,
-// 3, 0, -1, message, roomId, roomPassword]. Room id/password ride along in
-// plaintext so the invited client can auto-fill them for a follow-up
-// RoomJoin - there's no separate accept/invite-tracking handshake.
+// Field order lifted from Packets/RoomInvite.cs's Append() calls reads fine
+// on paper - [..., message, roomId, roomPassword] at the tail - and matches
+// real captures embedded in WarRock-ToXiiC-Core's own source comments. But a
+// live marker test (send a distinct value in every candidate slot, read
+// back which ones the client's own follow-up RoomJoin used) showed the
+// actual client we're targeting only ever picks up ONE of the two: password,
+// from the slot right after the message. The other RoomJoin field always
+// arrives as a literal 0, no matter what's sent in any slot - the client's
+// "accept invite" flow doesn't echo a room id back at all, it sends a fixed
+// sentinel and expects the server to already remember which room it invited
+// that player to (see handleRoomJoin's u.pendingInviteRoomId). room.id is
+// still sent here (harmless, unused) in case some client build does read it.
 function inviteFields(inviter, message, room) {
   const clan = clanInfo(inviter);
   return [
@@ -520,9 +542,9 @@ function inviteFields(inviter, message, room) {
     inviter.sessionId, inviter.sessionId,
     inviter.displayname,
     ...(clan ? [clan.id, clan.name, clan.rank, clan.rank] : [-1, -1, -1, -1]),
-    1, 18, inviter.xp, 3, 0, -1,
+    1, 18, inviter.xp, 3, room.id, -1,
     message,
-    room.id,
+    room.password,
     room.password,
   ];
 }
@@ -553,6 +575,7 @@ function handleRoomInvite(socket, pkt) {
     }
     const picked = candidates[Math.floor(Math.random() * candidates.length)];
     socket.sendPacket(ROOM_INVITE, [ROOM_INVITE_ERR.INVITED]);
+    picked.pendingInviteRoomId = room.id;
     picked.socket.sendPacket(ROOM_INVITE, inviteFields(u, message, room));
     return;
   }
@@ -560,7 +583,10 @@ function handleRoomInvite(socket, pkt) {
   for (const other of users.values()) {
     if (other.displayname !== target) continue;
     if (other.roomId !== null) socket.sendPacket(ROOM_INVITE, [ROOM_INVITE_ERR.IN_ROOM]);
-    else if (other.channel === u.channel) other.socket.sendPacket(ROOM_INVITE, inviteFields(u, message, room));
+    else if (other.channel === u.channel) {
+      other.pendingInviteRoomId = room.id;
+      other.socket.sendPacket(ROOM_INVITE, inviteFields(u, message, room));
+    }
   }
 }
 

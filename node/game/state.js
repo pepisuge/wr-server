@@ -11,11 +11,12 @@ function getChannel(channels, type) {
   return channels.get(type);
 }
 
-// Lowest free room id, starting at 1 - reuses ids freed by destroyed rooms
-// instead of counting up forever (matches Channel.GetOpenRoomID() in the
-// reference, which scans for a free slot rather than handing out new ones).
+// Lowest free room id, starting at 0 - reuses ids freed by destroyed rooms
+// instead of counting up forever (matches Channel.GetOpenRoomID() in both
+// C# references, which scan for a free slot starting at 0 rather than
+// handing out new ones).
 function nextFreeRoomId(chan) {
-  let id = 1;
+  let id = 0;
   while (chan.rooms.has(id)) id++;
   return id;
 }
