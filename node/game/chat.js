@@ -92,18 +92,17 @@ function handleChat(socket, pkt, db) {
 }
 
 // A server-authored line in the room's chat, not a reply to any incoming
-// CHAT packet - used by the autostart countdown (gamesubs.js) since that's
-// apparently how this client actually surfaces it (per live domain
-// knowledge: a countdown visible in chat). NOTICE1 instead of ROOM_TO_ALL so
-// it renders with distinct system styling instead of looking like a normal
-// player line - untested against the real client yet, and ping.js's own
-// premium-expiry notice comment flags a risk worth watching for: an earlier
-// WHISPER mix-up rendered as a popup instead of an inline chat line for a
-// different message type, so confirm this one still reads as a chat line
-// and not a popup once seen live.
+// CHAT packet - used by the autostart countdown (gamesubs.js). Tried NOTICE1
+// (targetId=999, ">>" prefix, matching every real Notice1 use in both
+// references) hoping for distinct system styling - live test showed it
+// renders as a popup instead, once per second, unusable for a countdown.
+// Back to ROOM_TO_ALL, the type confirmed to render as an ordinary chat line
+// (same color as a normal player message - a real but lesser problem than a
+// popup spamming every tick). Kept the "System>> " prefix since it doesn't
+// hurt and matches the same "name>> text" shape every other message uses.
 function broadcastSystemMessage(room, text) {
   const sockets = [...room.players.keys()].map((sid) => users.get(sid)?.socket).filter(Boolean);
-  broadcast(sockets, [1, 0, 'System', TYPE.NOTICE1, 0, 'NULL', text]);
+  broadcast(sockets, [1, 0, 'System', TYPE.ROOM_TO_ALL, 999, 'NULL', `System>> ${text}`]);
 }
 
 module.exports = { handleChat, CHAT, broadcastSystemMessage };

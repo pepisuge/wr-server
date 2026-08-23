@@ -9,6 +9,15 @@ const { broadcastSystemMessage } = require('./chat');
 
 const GAME_PACKET = 0x7530;
 const SCOREBOARD = 0x7550;
+// Game/Enums/Packets.cs's GameCountDown - exists in the reference but is
+// dead code there (Packets/CountDown.cs ignores its own `seconds` parameter
+// and always appends a literal 0, no caller anywhere in either reference).
+// Not a port: an experiment to see whether the real client reacts to this
+// opcode with a native countdown UI, since three attempts at triggering a
+// match via GAME_PACKET/START_REPLY alone (instant, after a chat countdown,
+// with a correctly-padded payload) all left the server in a real Playing
+// state with zero visible client reaction.
+const GAME_COUNTDOWN = 0x7531;
 
 // Game/Enums/Mode.cs - only the three modes actually implemented here.
 const EXPLOSIVE_MODE = 0;
@@ -174,43 +183,77 @@ function handleStart(room, player, payload, u, db) {
 // best-guess (user's memory placed it "between 18 and 20s", not from either
 // reference or a packet capture) - adjust once seen on the wire.
 //
-// What the countdown does NOT do here: fire a server-pushed START_REPLY at
-// 0. Tried that twice (once as an instant fire, once after this full real
-// countdown) - both times the server genuinely moved to Playing (map,
-// tickets, GameTick ticking for 80+ seconds) while the real client showed
-// zero reaction on any screen, not even a button highlight, then got a
-// surprise EndGame later when a player left a "match" it never visibly
-// entered. A real click on Start is the only thing confirmed to work at
-// all - so the countdown ends with a nudge to actually click it, not a fake
-// state transition nobody asked for. What real mechanism (if any) causes a
-// true zero-click start on this client build is still unknown.
+// Three separate live tests of "fire a server-pushed START_REPLY once
+// conditions are met" all showed the same result: the server moved to a
+// real Playing state (map, tickets, GameTick ticking for 80-130+ seconds)
+// while the client showed zero reaction on any screen - not instantly, not
+// after a real chat countdown, not even with the payload padded to match a
+// real client's own 10-field GamePacket length (ruling out "packet just too
+// short to parse" as the cause).
+//
+// What did change something: GAME_COUNTDOWN (0x7531) - dead code in the
+// reference (Packets/CountDown.cs ignores its own `seconds` parameter, no
+// caller anywhere), tried anyway as an experiment - turned out to render a
+// real native countdown in the client's chat UI, confirmed live. Still, by
+// itself, reaching 0 didn't cause the client to send its own Start. Fourth
+// attempt (see tryAutoStart below): send the real START_REPLY together with
+// GAME_COUNTDOWN's final 0 tick, a combination not tried before - if this
+// still doesn't work, the honest conclusion is that a true zero-click start
+// isn't achievable with what's known about this client's protocol, and the
+// countdown should go back to ending in a "press Start" nudge instead of
+// risking another desynced Playing state.
 const AUTOSTART_COUNTDOWN_SECONDS = 20;
 
 // Re-checks canStart() every tick so a player un-readying or unbalancing the
-// teams mid-countdown cancels it instead of nudging a start nobody agreed to
-// anymore. Self-cleans if the room empties out too (canStart requires 2+
+// teams mid-countdown cancels it instead of starting a match nobody agreed
+// to anymore. Self-cleans if the room empties out too (canStart requires 2+
 // players), no separate teardown wired to room deletion needed.
 function tryAutoStart(room) {
   if (room.autoStartCountdown) return; // already counting down
   if (!room.autoStart || room.state !== 1 || !canStart(room)) return;
 
+  // Broadcasts GAME_COUNTDOWN alongside the chat line each tick - see the
+  // opcode's own comment above for why (unproven experiment, not a port).
+  const sendCountdownPacket = (seconds) => {
+    const sockets = [...room.players.keys()].map((sid) => users.get(sid)?.socket).filter(Boolean);
+    broadcastPacket(sockets, XOR.external, GAME_COUNTDOWN, [seconds]);
+  };
+
   let remaining = AUTOSTART_COUNTDOWN_SECONDS;
   broadcastSystemMessage(room, `Avvio automatico tra ${remaining} secondi...`);
+  sendCountdownPacket(remaining);
   room.autoStartCountdown = setInterval(() => {
     if (!room.autoStart || room.state !== 1 || !canStart(room)) {
       clearInterval(room.autoStartCountdown);
       room.autoStartCountdown = null;
       broadcastSystemMessage(room, 'Avvio automatico annullato.');
+      sendCountdownPacket(0);
       return;
     }
     remaining--;
     if (remaining <= 0) {
       clearInterval(room.autoStartCountdown);
       room.autoStartCountdown = null;
+      // Fourth attempt (send the real START_REPLY together with
+      // GAME_COUNTDOWN's final 0 tick) also failed live: the client's native
+      // countdown UI genuinely reacts now - it shows its own hardcoded
+      // string "Starting the game 0!" at zero, proving it's watching this
+      // opcode and expects a match to begin - but the match still didn't
+      // start. Stopping here: four different combinations tried (instant,
+      // after a chat countdown, with a correctly-padded payload, paired with
+      // the native GAME_COUNTDOWN reaching 0) all end the same way, and
+      // guessing further risks the same "ghost match" desync each earlier
+      // attempt produced. beginMatch/START_REPLY is not fired automatically
+      // - only a real click on Start (handleStart above) is confirmed to
+      // work. GAME_COUNTDOWN is kept for the real, confirmed-working native
+      // countdown UI; what completes the transition at 0, if anything short
+      // of a real click can, is unknown.
+      sendCountdownPacket(0);
       broadcastSystemMessage(room, 'Tempo scaduto! Il master deve premere Start per iniziare.');
       return;
     }
     broadcastSystemMessage(room, String(remaining));
+    sendCountdownPacket(remaining);
   }, 1000);
 }
 
