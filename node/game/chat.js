@@ -6,6 +6,8 @@ const { handleGmCommand } = require('./gm');
 const CHAT = 0x7400;
 
 const TYPE = {
+  NOTICE1: 1,
+  NOTICE2: 2,
   LOBBY_TO_CHANNEL: 3,
   ROOM_TO_ALL: 4,
   WHISPER: 6,
@@ -89,4 +91,19 @@ function handleChat(socket, pkt, db) {
   }
 }
 
-module.exports = { handleChat, CHAT };
+// A server-authored line in the room's chat, not a reply to any incoming
+// CHAT packet - used by the autostart countdown (gamesubs.js) since that's
+// apparently how this client actually surfaces it (per live domain
+// knowledge: a countdown visible in chat). NOTICE1 instead of ROOM_TO_ALL so
+// it renders with distinct system styling instead of looking like a normal
+// player line - untested against the real client yet, and ping.js's own
+// premium-expiry notice comment flags a risk worth watching for: an earlier
+// WHISPER mix-up rendered as a popup instead of an inline chat line for a
+// different message type, so confirm this one still reads as a chat line
+// and not a popup once seen live.
+function broadcastSystemMessage(room, text) {
+  const sockets = [...room.players.keys()].map((sid) => users.get(sid)?.socket).filter(Boolean);
+  broadcast(sockets, [1, 0, 'System', TYPE.NOTICE1, 0, 'NULL', text]);
+}
+
+module.exports = { handleChat, CHAT, broadcastSystemMessage };

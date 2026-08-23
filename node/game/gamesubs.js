@@ -5,6 +5,7 @@ const { sendRoomUpdateToLobby, sendRoomPlayers, findFreeSlot } = require('./room
 const { startRoundTimer, checkWinCondition, endRound, scoreboardValues } = require('./roundtimer');
 const { getMap } = require('./maps');
 const { initExplosiveMatch } = require('./explosive');
+const { broadcastSystemMessage } = require('./chat');
 
 const GAME_PACKET = 0x7530;
 const SCOREBOARD = 0x7550;
@@ -166,18 +167,51 @@ function handleStart(room, player, payload, u, db) {
 }
 
 // New work, not a port: neither C# reference has any logic that reads
-// AutoStart/autostart to actually trigger a match - it's write-only in both
-// (parsed/toggled and shown to the client, never consumed). Called after a
-// Ready/SideUpdate ack (or the autostart toggle itself) already went out -
-// see handleGamePacket's `result.checkAutoStart` - so this always sends its
-// own separate GAME_PACKET broadcast rather than returning a result, since
-// the dispatcher's one reply slot is already used by the triggering action.
-function tryAutoStart(room, db) {
+// AutoStart/autostart to actually trigger a match (write-only in both, same
+// as EnableVoteKick). Domain knowledge from live testing filled part of the
+// gap the references don't cover: the real feature shows a countdown in the
+// room chat once conditions are met. AUTOSTART_COUNTDOWN_SECONDS is a
+// best-guess (user's memory placed it "between 18 and 20s", not from either
+// reference or a packet capture) - adjust once seen on the wire.
+//
+// What the countdown does NOT do here: fire a server-pushed START_REPLY at
+// 0. Tried that twice (once as an instant fire, once after this full real
+// countdown) - both times the server genuinely moved to Playing (map,
+// tickets, GameTick ticking for 80+ seconds) while the real client showed
+// zero reaction on any screen, not even a button highlight, then got a
+// surprise EndGame later when a player left a "match" it never visibly
+// entered. A real click on Start is the only thing confirmed to work at
+// all - so the countdown ends with a nudge to actually click it, not a fake
+// state transition nobody asked for. What real mechanism (if any) causes a
+// true zero-click start on this client build is still unknown.
+const AUTOSTART_COUNTDOWN_SECONDS = 20;
+
+// Re-checks canStart() every tick so a player un-readying or unbalancing the
+// teams mid-countdown cancels it instead of nudging a start nobody agreed to
+// anymore. Self-cleans if the room empties out too (canStart requires 2+
+// players), no separate teardown wired to room deletion needed.
+function tryAutoStart(room) {
+  if (room.autoStartCountdown) return; // already counting down
   if (!room.autoStart || room.state !== 1 || !canStart(room)) return;
-  beginMatch(room, db);
-  const fields = [1, room.master, room.id, 2, SUB.START_REPLY, 0, 0, room.map];
-  const sockets = [...room.players.keys()].map((sid) => users.get(sid)?.socket).filter(Boolean);
-  broadcastPacket(sockets, XOR.external, GAME_PACKET, fields);
+
+  let remaining = AUTOSTART_COUNTDOWN_SECONDS;
+  broadcastSystemMessage(room, `Avvio automatico tra ${remaining} secondi...`);
+  room.autoStartCountdown = setInterval(() => {
+    if (!room.autoStart || room.state !== 1 || !canStart(room)) {
+      clearInterval(room.autoStartCountdown);
+      room.autoStartCountdown = null;
+      broadcastSystemMessage(room, 'Avvio automatico annullato.');
+      return;
+    }
+    remaining--;
+    if (remaining <= 0) {
+      clearInterval(room.autoStartCountdown);
+      room.autoStartCountdown = null;
+      broadcastSystemMessage(room, 'Tempo scaduto! Il master deve premere Start per iniziare.');
+      return;
+    }
+    broadcastSystemMessage(room, String(remaining));
+  }, 1000);
 }
 
 // Ported from Handlers/Game/Lobby/ToggleAutostart.cs (GameSubs.Autostart=62,
@@ -191,6 +225,11 @@ function handleAutoStart(room, player, payload) {
   room.autoStart = !room.autoStart;
   const out = padded(payload, 3);
   out[2] = room.autoStart ? 1 : 0;
+  if (!room.autoStart && room.autoStartCountdown) {
+    clearInterval(room.autoStartCountdown);
+    room.autoStartCountdown = null;
+    broadcastSystemMessage(room, 'Avvio automatico annullato.');
+  }
   return { payload: out, updateLobby: true, checkAutoStart: true };
 }
 
@@ -675,7 +714,7 @@ function handleGamePacket(socket, pkt, db) {
   broadcastPacket(sockets, XOR.external, GAME_PACKET, fields);
 
   if (result.updateLobby) sendRoomUpdateToLobby(room, true);
-  if (result.checkAutoStart) tryAutoStart(room, db);
+  if (result.checkAutoStart) tryAutoStart(room);
 }
 
 module.exports = { handleGamePacket, GAME_PACKET, handleScoreboardRequest, SCOREBOARD };
