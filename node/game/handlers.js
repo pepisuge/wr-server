@@ -152,6 +152,8 @@ function createHandlers(db) {
       channel: null,
       roomId: null,
       xp,
+      kills: Number(row.kills),
+      deaths: Number(row.deaths),
       money,
       premium,
       premiumExpireDate: expireDate,

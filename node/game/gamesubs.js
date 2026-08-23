@@ -489,6 +489,8 @@ function handlePlayerDamage(room, player, payload, u, db) {
     // can't end the round.
     player.kills = Math.max(0, player.kills - 1);
     player.deaths += 1;
+    u.kills = Math.max(0, u.kills - 1);
+    u.deaths += 1;
     db.query('UPDATE user_details SET deaths = deaths + 1, kills = GREATEST(0, CAST(kills AS SIGNED) - 1) WHERE id = ?', [
       player.userId,
     ]).catch((err) => console.error('PlayerDamage: failed to persist friendly-fire penalty:', err.message));
@@ -497,6 +499,14 @@ function handlePlayerDamage(room, player, payload, u, db) {
 
   victim.deaths += 1;
   player.kills += 1;
+  // RoomPlayers.cs's roster field is the ACCOUNT's lifetime kills/deaths
+  // (User.Kills), not this room's match tally - mirror the same increment
+  // onto the account object kept in `users` so the lobby tooltip (which
+  // reads this, not `player.kills`/`player.deaths`) doesn't sit at 0 until
+  // the next login re-reads the DB.
+  const victimUser = users.get(victim.sessionId);
+  if (victimUser) victimUser.deaths += 1;
+  u.kills += 1;
   db.query('UPDATE user_details SET deaths = deaths + 1 WHERE id = ?', [victim.userId]).catch((err) =>
     console.error('PlayerDamage: failed to persist death:', err.message)
   );
@@ -622,6 +632,7 @@ function handleSuicide(room, player, payload, u, db) {
   player.health = 0;
   player.alive = false;
   player.deaths += 1;
+  u.deaths += 1;
   db.query('UPDATE user_details SET deaths = deaths + 1 WHERE id = ?', [player.userId]).catch((err) =>
     console.error('Suicide: failed to persist death:', err.message)
   );

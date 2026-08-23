@@ -65,9 +65,13 @@ function roomInfoFields(room) {
 // The per-player roster block (Game/Packets/RoomPlayers.cs) - what tells the
 // client who else is in the room and lets it render team/ready state.
 // ponytail: IP:port is still a placeholder ("not connected") - we don't
-// track the UDP endpoint per player. health/kills/deaths/weapon/class are
-// real (weapon/class set by gamesubs.js's WeaponSwitch/Spawn) - class stays
-// 0 (Engineer) until the player's first spawn, same as the reference.
+// track the UDP endpoint per player. health/weapon/class are real
+// (weapon/class set by gamesubs.js's WeaponSwitch/Spawn) - class stays 0
+// (Engineer) until the player's first spawn, same as the reference.
+// kills/deaths are the ACCOUNT's lifetime totals (u.kills/u.deaths,
+// RoomPlayers.cs's User.Kills/Deaths), not this match's tally - that's what
+// the pre-match room tooltip shows, kept live in sync by
+// gamesubs.js's handlePlayerDamage instead of only refreshed at login.
 function roomPlayerFields(player) {
   const u = users.get(player.sessionId);
   const clan = u ? clanInfo(u) : null;
@@ -88,8 +92,8 @@ function roomPlayerFields(player) {
     910,
     u ? u.premium : 0,
     -1,
-    player.kills ?? 0,
-    player.deaths ?? 0,
+    u ? u.kills : 0,
+    u ? u.deaths : 0,
     0,
     u ? u.xp : 0,
     -1,
