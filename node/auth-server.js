@@ -1,5 +1,5 @@
 const net = require('net');
-const config = require('./config.json');
+const config = require('./lib/config');
 const { createPool } = require('./lib/db');
 const { wrapSocket, sendGreeting } = require('./lib/xor-socket');
 const { PORTS, XOR } = require('./lib/constants');

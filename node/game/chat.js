@@ -114,4 +114,21 @@ function broadcastSystemMessage(room, text) {
   broadcast(sockets, [1, 0, 'System', TYPE.ROOM_TO_ALL, 999, 'NULL', `System>> ${text}`]);
 }
 
-module.exports = { handleChat, CHAT, broadcastSystemMessage };
+// A server-authored whisper to just one socket - same wire shape as a real
+// WHISPER, sender name "SYSTEM". Used by clan.js for the errors ToXiiC's
+// reference sends this way instead of a CLAN_SYSTEM reply (name taken, not
+// enough dinar, not the master, ...).
+function sendSystemWhisper(socket, text) {
+  const u = socket.user;
+  socket.sendPacket(CHAT, [1, 0, 'SYSTEM', TYPE.WHISPER, u.sessionId, u.displayname, `SYSTEM>> ${text}`]);
+}
+
+// A server-authored line in a clan's own chat (disband/promote notices) -
+// same TYPE.CLAN shape a real member message uses, just authored by
+// "ClanSystem". Mirrors broadcastSystemMessage's role for room chat.
+function sendClanNotice(clanId, text) {
+  const sockets = [...users.values()].filter((x) => x.clanId === clanId).map((x) => x.socket);
+  broadcast(sockets, [1, 0, 'ClanSystem', TYPE.CLAN, clanId, 'NULL', `ClanSystem>> ${text}`]);
+}
+
+module.exports = { handleChat, CHAT, broadcastSystemMessage, sendSystemWhisper, sendClanNotice };

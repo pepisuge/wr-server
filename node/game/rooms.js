@@ -216,9 +216,12 @@ function handleRoomCreation(socket, pkt) {
   sendRoomUpdateToLobby(room, false);
 }
 
-// Invoked from clan.js's START_WAR - no client packet triggers this, the
-// reference never actually wires up isClanWar=true anywhere (see the
-// guide), so there's no RoomCreation request to read fields from. Reuses
+// Invoked from clan.js's START_WAR - no client packet triggers this. ToXiiC's
+// Room.cs DOES wire up isClanWar/Clan1/Clan2 and real win/lose/exp handling
+// once a war room exists (Chapter-1-Server's own reference stays silent on
+// it, same pattern as the clan system itself - see Fase 45) - what's still
+// missing is how a real client actually *starts* one; no CLAN_SYSTEM subtype
+// does it, maybe RoomCreation's own fields directly. Reuses
 // the same room shape/broadcast as a normal creation so the rest of
 // rooms.js (join/leave/roster) treats it identically to any other room.
 function createClanWarRoom(challenger, opponentClanId) {

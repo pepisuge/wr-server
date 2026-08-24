@@ -1,0 +1,58 @@
+services:
+  db:
+    image: mariadb:10.11
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./WarRock-Chapter-1-Server/Databases/LoginServer.SQL:/docker-entrypoint-initdb.d/01-login.sql:ro
+      - ./WarRock-Chapter-1-Server/Databases/GameServer.SQL:/docker-entrypoint-initdb.d/02-game.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p\"$$MARIADB_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: on-failure
+
+  auth:
+    build:
+      context: ./node
+    command: ["node", "auth-server.js"]
+    environment:
+      DB_HOST: db
+      DB_USER: root
+      DB_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "5330:5330"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(5330,'127.0.0.1').on('connect',s=>{s.end();process.exit(0)}).on('error',()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: on-failure
+
+  game:
+    build:
+      context: ./node
+    command: ["node", "game-server.js"]
+    environment:
+      DB_HOST: db
+      DB_USER: root
+      DB_PASSWORD: ${DB_PASSWORD}
+      GAME_AUTH_HOST: auth
+    ports:
+      - "5340:5340"
+      - "5350:5350/udp"
+      - "5351:5351/udp"
+    depends_on:
+      db:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+    restart: on-failure
+
+volumes:
+  db_data:

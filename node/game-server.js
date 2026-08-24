@@ -1,6 +1,6 @@
 const net = require('net');
 const dgram = require('dgram');
-const config = require('./config.json');
+const config = require('./lib/config');
 const { createPool } = require('./lib/db');
 const { wrapSocket, sendGreeting } = require('./lib/xor-socket');
 const { PORTS, XOR } = require('./lib/constants');
@@ -9,7 +9,7 @@ const { createHandlers } = require('./game/handlers');
 const { handleUdpPacket, startUdpKeepalive } = require('./game/udp-handlers');
 const { loadGameConfig } = require('./game/progression');
 const { startPingLoop } = require('./game/ping');
-const { loadClans } = require('./game/clan');
+const { loadClans, setAuthDb: setClanAuthDb } = require('./game/clan');
 const { loadItems } = require('./game/items');
 const { loadCoupons } = require('./game/coupon');
 const { loadMaps } = require('./game/maps');
@@ -27,10 +27,13 @@ async function main() {
   // /ban and /unban (gm.js) mutate the auth DB's users.status - the same
   // column auth/handlers.js already checks at login - so the game process
   // needs its own small connection there too, separate from the `db` pool
-  // above (which only ever points at the game DB, wres2).
+  // above (which only ever points at the game DB, wres2). clan.js reuses the
+  // same pool to resolve displaynames for member/pending/search lists (also
+  // login-DB-only data).
   const authDb = createPool(config.auth.db);
   await authDb.query('SELECT 1');
   setAuthDb(authDb);
+  setClanAuthDb(authDb);
   await loadGameConfig(db);
   await loadClans(db);
   await loadItems(db);

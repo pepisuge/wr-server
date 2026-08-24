@@ -5,7 +5,7 @@ const { handleGamePacket, GAME_PACKET, handleScoreboardRequest, SCOREBOARD } = r
 const { handleExplosivesPacket, EXPLOSIVES } = require('./explosive');
 const { handleEquipment, EQUIPMENT } = require('./equipment');
 const { loadUserDetails, effectivePremium, levelForXp } = require('./progression');
-const { CLAN_SYSTEM, handleClanSystem, clanInfo } = require('./clan');
+const { CLAN_SYSTEM, CLAN_RANKING, handleClanSystem, handleClanRanking, clanInfo } = require('./clan');
 const { handleUserList, announceJoin, announceLeave, USER_LIST } = require('./userlist');
 const { handleItemshop, ITEMSHOP } = require('./shop');
 const { loadUserInventory, loadUserEquipment, buildItemlist, buildSlotState } = require('./inventory');
@@ -213,6 +213,7 @@ function createHandlers(db) {
     [EXPLOSIVES]: handleExplosivesPacket,
     [EQUIPMENT]: handleEquipment(db),
     [CLAN_SYSTEM]: handleClanSystem(db),
+    [CLAN_RANKING]: handleClanRanking,
     [ITEMSHOP]: handleItemshop(db),
     [COUPON]: handleCoupon(db),
     [PING]: handlePingReply,
