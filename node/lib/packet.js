@@ -1,5 +1,5 @@
 function xorBuffer(buf, key) {
-  const out = Buffer.alloc(buf.length);
+  const out = Buffer.allocUnsafe(buf.length); // every byte is overwritten below, alloc's zero-fill is wasted work
   for (let i = 0; i < buf.length; i++) out[i] = buf[i] ^ key;
   return out;
 }
@@ -10,7 +10,11 @@ function parsePacket(buf) {
 }
 
 function buildPacket(id, fields = []) {
-  const escaped = fields.map((f) => String(f).replace(/ /g, '\x1D'));
+  // Most fields are numbers, which never contain a space - skip the regex for those.
+  const escaped = fields.map((f) => {
+    const s = String(f);
+    return s.indexOf(' ') === -1 ? s : s.replace(/ /g, '\x1D');
+  });
   const str = [Date.now() & 0x7fffffff, id, ...escaped].join(' ') + ' \n';
   return Buffer.from(str, 'utf8');
 }

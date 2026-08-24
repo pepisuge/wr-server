@@ -33,7 +33,8 @@ function userListEntry(u, index) {
 function buildUserListFields(page) {
   const list = [...users.values()];
   const fields = [list.length, page];
-  list.forEach((u, i) => fields.push(...userListEntry(u, i + page * 10)));
+  const start = page * 10;
+  list.slice(start, start + 10).forEach((u, i) => fields.push(...userListEntry(u, start + i)));
   return fields;
 }
 

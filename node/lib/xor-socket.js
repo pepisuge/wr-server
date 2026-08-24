@@ -7,7 +7,8 @@ function wrapSocket(socket, keys, onPacket) {
   let buffer = Buffer.alloc(0);
 
   socket.on('data', (chunk) => {
-    buffer = Buffer.concat([buffer, xorBuffer(chunk, keys.receive)]);
+    const decoded = xorBuffer(chunk, keys.receive);
+    buffer = buffer.length === 0 ? decoded : Buffer.concat([buffer, decoded]);
     let newlineIndex;
     while ((newlineIndex = buffer.indexOf(0x0a)) !== -1) {
       const line = buffer.subarray(0, newlineIndex + 1);

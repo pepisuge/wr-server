@@ -105,6 +105,11 @@ function createHandlers(db) {
         return;
       }
     }
+    if (users.has(sessionId)) {
+      socket.sendPacket(AUTHORIZATION, [92040]); // IdInUse
+      socket.end();
+      return;
+    }
 
     // Fase 5/6: real xp/money/premium from user_details, row created with
     // the reference's defaults on first login (see progression.js).

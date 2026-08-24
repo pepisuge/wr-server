@@ -45,6 +45,22 @@ function sendLoginError(socket, code) {
   socket.end();
 }
 
+// Capped at 15 bits (max 0x7ffe=32766): the client stores/echoes this as a
+// *signed* 16-bit int, so anything from 32768-65535 wraps negative when it
+// comes back (observed: sent 39574, got back -25962 = 39574-65536).
+// Sequential instead of random: random collided (birthday paradox - already
+// 46% likely with 200 concurrent logins) and a collision silently overwrote
+// another player's entry in game/state.js's `users` map with no error. A
+// wrapping counter can't collide until 0x7ffe players are online at once,
+// which handleAuthorization's users.has() guard (game/handlers.js) rejects
+// with IdInUse same as it already does for a duplicate account.
+let nextSessionId = 1;
+function allocSessionId() {
+  const id = nextSessionId;
+  nextSessionId = (nextSessionId % 0x7ffe) + 1;
+  return id;
+}
+
 function createHandlers(db) {
   // Ported from Authorization/Handlers/PlayerLogin.cs + Packets/ServerList.cs.
   // Field indices (blocks[2]=username, blocks[3]=password) come straight
@@ -70,10 +86,7 @@ function createHandlers(db) {
 
     // ponytail: no session bookkeeping yet (no duplicate-login check, no
     // link to the Game server's own auth check) - add when Phase 3 needs it.
-    // Capped at 15 bits (max 32767): the client stores/echoes this as a
-    // *signed* 16-bit int, so anything from 32768-65535 wraps negative when
-    // it comes back (observed: sent 39574, got back -25962 = 39574-65536).
-    const sessionId = 1 + Math.floor(Math.random() * 0x7ffe);
+    const sessionId = allocSessionId();
     const servers = getAllAuthorized();
 
     // Note: the C# reference appends a "1.11025 // PF_20" version field here,

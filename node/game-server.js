@@ -40,6 +40,7 @@ async function main() {
   const handlers = createHandlers(db);
   const gameListener = net.createServer((socket) => {
     console.log(`Game: connection from ${socket.remoteAddress}:${socket.remotePort}`);
+    socket.setNoDelay(true); // avoid Nagle batching consecutive sends (room join, gunfire) into a laggy single flush
     wrapSocket(socket, XOR.external, (pkt) => {
       logPacket('Game IN', pkt);
       const handler = handlers[pkt.id];
@@ -65,6 +66,10 @@ async function main() {
 
   for (const port of [PORTS.udp1, PORTS.udp2]) {
     const udp = dgram.createSocket('udp4');
+    // Same crash the TCP socket.on('error', ...) above already guards against:
+    // sending to a peer that just disconnected raises ECONNRESET here too,
+    // and dgram sockets have no default handler for it either.
+    udp.on('error', (err) => console.log(`UDP:${port} socket error: ${err.message}`));
     udp.on('message', (msg, rinfo) => handleUdpPacket(udp, msg, rinfo, port));
     udp.bind(port, () => console.log(`UDP: listening on ${port}`));
   }
