@@ -66,6 +66,7 @@ function handlePingHandshake(socket, msg, rinfo) {
   const localEndpoint = readEndpoint(msg, 32);
 
   const u = users.get(sessionId);
+  console.log(`[udp-handshake] session ${sessionId} on server port ${socket.address().port} from ${rinfo.address}:${rinfo.port} (client-reported local ${readEndpoint(msg, 32).ip}:${readEndpoint(msg, 32).port})`);
 
   const response = Buffer.alloc(65);
   msg.copy(response, 0, 0, Math.min(msg.length, 65));
@@ -113,6 +114,7 @@ function startUdpKeepalive() {
 // this would be a free relay for anyone who guesses two session ids.
 function handleTunnel(socket, msg, rinfo) {
   logTunnelSample(msg);
+  const via = `${socket.address().port}<-${rinfo.address}:${rinfo.port}`; // local server port <- peer's source address (compare with its handshake endpoint)
 
   const sessionId = msg.readUInt16BE(4);
   const roomId = msg.readUInt16BE(6);
@@ -120,14 +122,16 @@ function handleTunnel(socket, msg, rinfo) {
 
   const sender = users.get(sessionId);
   const target = users.get(targetId);
-  if (!sender || !target || sender.roomId !== roomId || target.roomId !== roomId) return countRelay(sessionId, targetId, 'drop:no-sender/target/room');
+  if (!sender || !target || sender.roomId !== roomId || target.roomId !== roomId) return countRelay(sessionId, targetId, `drop:no-sender/target/room via ${via}`);
 
   const room = getChannel(sender.channel).rooms.get(roomId);
   if (!room || room.state !== 2) return countRelay(sessionId, targetId, 'drop:not-playing'); // Playing
 
   if (!target.udpEndpoint) return countRelay(sessionId, targetId, 'drop:no-udp-endpoint');
-  socket.send(msg, target.udpEndpoint.port, target.udpEndpoint.address);
-  countRelay(sessionId, targetId, `sent->${target.udpEndpoint.address}:${target.udpEndpoint.port}`);
+  // Send from the server socket the TARGET handshook on (5350 for the real client): it only ever talked to that
+  // address, and the packet is relayed from whichever port the *sender* used (5351 for the bot) otherwise.
+  (target.udpKeepaliveSocket || socket).send(msg, target.udpEndpoint.port, target.udpEndpoint.address);
+  countRelay(sessionId, targetId, `sent->${target.udpEndpoint.address}:${target.udpEndpoint.port} via ${via}`);
 }
 
 // Per sender->target counters, printed every 5s: tells at a glance whether a peer's packets are
