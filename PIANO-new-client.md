@@ -109,3 +109,17 @@ Catena ricostruita da `WarRock.exe` (Ghidra, progetto `re-tools\proj22`):
 - Info giocatori `0x7500`: `FUN_005f46a0` legge N record (~29 campi: id, session, slot, ..., nick 512 byte, ..., due endpoint IP:porta); `FUN_005f4100` li applica ai record per slot.
 
 Conseguenze per il bot (`fake-client.js`): lo spawn inviato aveva `p2 = 13` (valore inventato); un valore fuori dal range dei modelli e' una causa plausibile di entita' invisibile. Ora usa `p2 = 1`, `p3 = 0` (classe 0), `p0 = 0` come il client reale. Resta da verificare dal vivo; se non basta, i candidati sono: movimento UDP (il bot rigioca la cattura del 17.x) e la forma esatta del record `0x7500` del bot.
+
+## G. Indagine "il bot non si vede" (2026-11-04) - stato
+
+Strumenti: lettura memoria del client in esecuzione (WarRock.exe gira ELEVATO: serve UAC; script a campionamento, `ReadProcessMemory`, solo lettura), contatore relay UDP lato server (`[udp-relay/5s]` in `game/udp-handlers.js`), decompilazione Ghidra.
+
+Accertato:
+- Relay UDP ok in entrambe le direzioni (bot->client ~18 pkt/s, client->bot ~3 pkt/s), verso gli endpoint registrati.
+- Il client crea l'entita' dello slot del bot (`entity[slot]`, flag remoto `+0xfc=1`, `+0x2ec=slot`) ma NON applica posizione/stato: `+0x34/+0x3c` (coordinate dell'entita' locale) restano 0 per il bot.
+- Lo Spawn (sub 150) viene ignorato dal client se la mappa non e' ancora caricata (`FUN_004e37b0`): il bot ora spawna dopo lo spawn del giocatore reale.
+- Campi spawn: `payload[2]` = indice punto di spawn (< numero punti mappa, qui 8; 13 -> nessuna entita'), `payload[3..4]` = classe/modello (reale: `[0,0,idx,1,1,...]`).
+- Intestazione tunnel UDP: i byte 10-13 (valore per sessione del client reale), 24-25 e 28 (per sub-comando) del bot erano costanti vecchie; ora copiati dai pacchetti reali ricevuti.
+- Formato corpo 0x31 (float XOR 0xc3, offset nel corpo dopo i 29 byte di header): X@29, altezza@33, Z@37 (+ copie precedenti @73/77/81 e @85/89/93), angoli @9/13/41.
+
+Non risolto: perche' il client non applica i frame di movimento del bot. Prossimi passi: (1) test con DUE client reali e confronto dei log (spawn, 0x7500, header/corpo UDP) col bot; (2) trovare il metodo virtuale del gestore UDP del client (`FUN_006b0d10` chiama `vtable+0x14`) e leggere cosa valida; (3) leggere il dump completo (`dump.ingame.txt`) dopo lo spawn del bot per capire dove finisce la posizione.
