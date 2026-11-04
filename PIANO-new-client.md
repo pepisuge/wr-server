@@ -67,3 +67,5 @@ Cosa serviva (nessuna DLL sostitutiva: l'SDK HackShield e' linkato staticamente 
 Lezione di metodo: il minidump (`tools/client22/minidump.py`) + stack + Ghidra headless ha dato la causa in pochi passi; l'ipotesi "16 bit / GPU" era sbagliata e il messaggio d'errore a schermo (screenshot) ha chiuso il caso.
 
 Aperti: la risposta LAUNCHER 0x1010 azzera `version.cfg` (Updater=0) - rispondere con le versioni reali; rendere il campo versione login configurabile; poi stanze/partita sul client 22 e sezione B.
+
+**Aggiornamento**: stanza creata e partita avviata (Start) dal client 22 con un bot `fake-client` come secondo giocatore: pacchetti di gioco (id 30000) e relay UDP regolari, zero errori server. `fake-client.js` allineato al campo versione (indici IP/porta +1).
