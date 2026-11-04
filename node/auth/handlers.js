@@ -31,12 +31,14 @@ function sha256(str) {
   return crypto.createHash('sha256').update(str, 'ascii').digest('hex');
 }
 
-// Reply with version 0 in every field - since that's always lower than
-// whatever version the client actually has, it concludes it's already up to
-// date and moves on. Ported as-is from Authorization/Handlers/Launcher.cs +
-// Authorization/Packets/Launcher.cs.
+// Same order as the client's version.cfg: Format, Launcher, Updater, Client, Sub, Option.
+// Echoing the installed versions (client 22: 0/10/15/22/0/0) = "already up to date" and
+// the launcher leaves version.cfg alone; the C# reference sends all 0, which made client 22
+// rewrite Updater=0. Request carries no version, so this must match the client you test with.
+const PATCH_VERSIONS = [0, 10, 15, 22, 0, 0];
+
 function handleLauncher(socket) {
-  socket.sendPacket(LAUNCHER, [0, 0, 0, 0, 0, 0, 'http://']);
+  socket.sendPacket(LAUNCHER, [...PATCH_VERSIONS, 'http://']);
   socket.end();
 }
 

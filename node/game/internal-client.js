@@ -29,7 +29,10 @@ function connectToAuthServer(config) {
   });
 
   socket.on('error', (err) => console.log(`Internal: socket error: ${err.message}`));
-  socket.on('close', () => console.log('Internal: disconnected from Auth server'));
+  socket.on('close', () => {
+    console.log('Internal: disconnected from Auth server, retrying in 3s');
+    setTimeout(() => connectToAuthServer(config), 3000); // auth restarts must not need a game restart
+  });
 
   return socket;
 }
