@@ -98,3 +98,14 @@ Ricavato da stringhe + decompilazione Ghidra (`FUN_00402d90` nel launcher, `FUN_
 - Con `PATCH_VERSIONS` uguale a `version.cfg` (0,10,15,22,0,0) il launcher non scarica nulla: e' la configurazione attuale e va bene.
 - **Attenzione**: se `version.cfg` locale ha `Updater` < valore del server (es. 0 contro 15) il launcher tenta di scaricare `updater.zip` da `patch.warrock.net` (host inesistente -> errore). Tenere `version.cfg` e `PATCH_VERSIONS` allineati.
 - Per *distribuire* patch ai propri client servirebbe: `hosts` che punti `patch.warrock.net` a 127.0.0.1 (o altro host), un server HTTP statico con `/k2network/warrock/version.txt` e gli zip `PF_22_23.zip` ecc. nel formato col CRC header, e `PATCH_VERSIONS` con Client = 23. Non implementato: non serve finche' usiamo un solo client modificato a mano.
+
+## F. Come il client 22 crea un giocatore remoto (decompilazione, 2026-11-04)
+
+Catena ricostruita da `WarRock.exe` (Ghidra, progetto `re-tools\proj22`):
+- Tabella gestori pacchetti `FUN_005fefa0`: `0x7500` (info giocatori) -> `FUN_005f4900`, `30000 = 0x7530` (gioco) -> `0x005f2d20`.
+- `0x7530` tipo `2` (in partita): sottotipi 102-500 passano solo se i flag globali `DAT_00b8cbf8` e `DAT_00b8cc10` sono != 0 (partita caricata); 100 e 150 passano sempre. Poi tabella sottotipo->funzione (`FUN_004e4800`): **150 (Spawn) = `FUN_004e39f0`**, 100 (ConfirmSpawn) = `FUN_004dd7d0` (scrive solo un campo per slot), 151 = `FUN_004e44d0`, ecc.
+- Spawn (`FUN_004e3960` + `FUN_004e37b0`), campi del payload dopo il sottotipo: `p0` = indice punto di spawn (`p6` se modalita' `+0x39188 == 1`); `p1`->`c37e24`, `p2`->`c37e28` (poi passato a `FUN_004f0a00`: selettore tipo modello/arma, **non** un punto di spawn), `p3`->`c37e3c`, `p4`->`c37e10`, `p5`->`c37e14`; salute = 1000. Record per slot: array a stride 0xd20 da `0xc37e24`.
+- Creazione entita' `FUN_004eedf0(slot, idx, 0, pos)` agisce SOLO se: slot < 32; **`idx` < numero di punti di spawn della mappa caricata**; `c37eac[slot] >= 0` (impostato da 0x7500 = lo slot stesso, quindi basta aver ricevuto le info del giocatore). Poi crea l'oggetto 0x300 byte, lo marca remoto (`+0xfc = 1`) e imposta il modello da `p2`.
+- Info giocatori `0x7500`: `FUN_005f46a0` legge N record (~29 campi: id, session, slot, ..., nick 512 byte, ..., due endpoint IP:porta); `FUN_005f4100` li applica ai record per slot.
+
+Conseguenze per il bot (`fake-client.js`): lo spawn inviato aveva `p2 = 13` (valore inventato); un valore fuori dal range dei modelli e' una causa plausibile di entita' invisibile. Ora usa `p2 = 1`, `p3 = 0` (classe 0), `p0 = 0` come il client reale. Resta da verificare dal vivo; se non basta, i candidati sono: movimento UDP (il bot rigioca la cattura del 17.x) e la forma esatta del record `0x7500` del bot.
