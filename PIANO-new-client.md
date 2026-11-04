@@ -139,3 +139,17 @@ Non trovato: il metodo virtuale effettivo `+0x14` dell'oggetto di rete (i vtable
 Metodo riutilizzabile: il client gira elevato -> script `ReadProcessMemory` lanciato con UAC (`Start-Process powershell -Verb RunAs`), campionamento su file; indirizzi chiave: `DAT_00bfc1e8`(mgr) `+0x4e324` = slot locale; array giocatori `0xc37e24 + slot*0x1a40`; tabella entita' `*DAT_010e743c`.
 
 Prossimo passo consigliato: test con DUE client reali (il server logga gia' handshake/UDP di entrambi) e confronto dei frame; oppure trovare l'oggetto di rete del client (costruttore del thread `FUN_006b21e0`) e leggerne i contatori.
+
+## H. Sistema di patch (launcher/updater) - verificato dal vivo con una copia di prova
+
+Esito: **la pipeline funziona con zip normali**. Prova su `re-tools\wrtest` (launcher+updater copiati, `version.cfg` a Client=21): `GET /wr/PF_0_21.zip` -> 200, file estratto nella cartella del gioco, `version.cfg` aggiornato da solo a Client=22.
+
+Regole ricavate (decompilato + prova):
+- Il launcher chiede `0x1010` al login: risposta `Format, Launcher, Updater, Client, Sub, Option, URL`. Con la risposta valida l'URL del campo e' la **base di download dei pacchetti** (usato dall'updater). Se il login non risponde, ripiega su `version.txt` da `http://patch.warrock.net/k2network/warrock/` (URL cablato, serve la voce `hosts` `patch.warrock.net`; `version.txt` = copia di `version.cfg`).
+- Nomi: `updater.zip` (scaricato dal launcher se `Updater` locale < remoto), `launcher.zip` (dall'updater se `Launcher` locale < remoto), **`PF_<Format>_<ClientDiPartenza>.zip`** per ogni `Client` da locale a remoto-1 (es. 17->22 = PF_0_17, PF_0_18, ..., PF_0_21), `Sub<n>.zip`, `optpatch.zip`.
+- Formato: ZIP standard, percorsi relativi alla radice del gioco; l'updater riscrive `version.cfg` dopo ogni pacchetto. User-Agent `WR_LAUNCHER` / `WR_UPDATER`. Un file che inizia con `<?` viene scartato come URL non valido.
+- WRUpdater.exe gira come amministratore (UAC) e crea `System\pbsign`.
+
+Strumenti nel repo: `tools/patch-server/patch-server.js` (server HTTP statico, serve `./wr/`, logga ogni richiesta), `WR_PATCH_URL` (variabile d'ambiente del login) per l'URL nel pacchetto 0x1010.
+
+Attenzione operativa: la riga aggiunta a `hosts` va su una riga propria (mancava il newline finale: la prima volta si e' fusa con `login.warrock.net` e l'ha rotta).

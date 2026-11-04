@@ -38,7 +38,7 @@ function sha256(str) {
 const PATCH_VERSIONS = [0, 10, 15, 22, 0, 0];
 
 function handleLauncher(socket) {
-  socket.sendPacket(LAUNCHER, [...PATCH_VERSIONS, 'http://']);
+  socket.sendPacket(LAUNCHER, [...PATCH_VERSIONS, process.env.WR_PATCH_URL || 'http://']);
   socket.end();
 }
 
