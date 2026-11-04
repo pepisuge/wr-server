@@ -7,7 +7,20 @@ const { ownsItem, buildItemlist, buildSlotState, MAX_ITEMS } = require('./invent
 
 const ITEMSHOP = 0x7600;
 const BUY_ITEM = 0x456; // Enums.ItemAction.BuyItem
-const USE_ITEM = 0x457; // Enums.ItemAction.UseItem - never implemented in the reference either
+// USE_ITEM looked unimplemented in Chapter-1-Server - but ToXiiC-Core's
+// CashItemBuy.cs has a real OnItemUse=1111 (=0x457) handler, same trap as
+// the GM commands (CLAUDE.md). Only CB01 (rename) and CB03 (kill/death
+// reset) are ported below - the reference's other cases (CZ73 ham radio,
+// CC56/57/36/37+CZ99+CR16+CR05 random/gift boxes) need a package-reward
+// system this schema has no tables for, and are left unhandled.
+const USE_ITEM = 0x457;
+
+// Same pattern as gm.js/clan.js: CB01's rename touches masterserver.users
+// (displayname), not this process's own `db` pool (wres2).
+let authDb = null;
+function setAuthDb(pool) {
+  authDb = pool;
+}
 
 // Packets/Itemshop.cs's ErrorCodes enum, the values actually reachable from
 // this handler's validation chain.
@@ -26,10 +39,13 @@ function sendError(socket, code) {
   socket.sendPacket(ITEMSHOP, [code]);
 }
 
-function sendSuccess(socket, u) {
+// actionType defaults to BUY_ITEM (the only caller until USE_ITEM below) -
+// both actions end in the same "here's your fresh inventory/money" resync,
+// so this one shape covers both instead of a second near-duplicate builder.
+function sendSuccess(socket, u, actionType = BUY_ITEM) {
   socket.sendPacket(ITEMSHOP, [
     1,
-    BUY_ITEM,
+    actionType,
     -1,
     3,
     u.inventory.size,
@@ -52,6 +68,69 @@ function grantItem(db, u, code, days) {
   ).catch((err) => console.error('shop: failed to persist granted item:', err.message));
 }
 
+// The reverse of grantItem - spends one owned item. Used below for CB01/CB03
+// and by clan.js's NickChange (CB02) - real consumable items, not stackable
+// quantities, so "consume" just drops the one row this schema tracks per
+// owned code.
+function removeItem(db, u, code) {
+  u.inventory.delete(code);
+  db.query('UPDATE user_inventory SET deleted = 1 WHERE owner = ? AND code = ? AND deleted = 0', [u.id, code]).catch(
+    (err) => console.error('shop: failed to persist item consumption:', err.message)
+  );
+}
+
+// CB01 - Managers/CashItemBuy.cs's OnItemUse "CB01" case: rename the
+// account's displayname (masterserver.users), rejecting a collision the same
+// way the reference does (a plain SELECT check, no DB unique constraint on
+// this column either).
+async function renameDisplayname(u, nickname) {
+  if (!authDb) return false;
+  const [existing] = await authDb.query('SELECT id FROM users WHERE displayname = ? AND id != ?', [nickname, u.id]);
+  if (existing.length) return false;
+  u.displayname = nickname;
+  authDb
+    .query('UPDATE users SET displayname = ? WHERE id = ?', [nickname, u.id])
+    .catch((err) => console.error('shop: failed to persist nickname change:', err.message));
+  return true;
+}
+
+// items.bin's `users.displayname` column is varchar(16); IsAlphaNumeric in
+// the reference has no length check of its own, just the column width.
+const NICKNAME_RE = /^[a-zA-Z0-9]{3,16}$/;
+
+async function handleUseItem(socket, db, u, pkt) {
+  const itemCode = (pkt.blocks[1] || '').toUpperCase();
+  if (!ownsItem(u.inventory, itemCode)) return sendError(socket, ERROR.INVALID_ITEM);
+
+  if (itemCode === 'CB03') {
+    // INI_KILLDEATH - Managers/CashItemBuy.cs's OnItemUse "CB03" case.
+    u.kills = 0;
+    u.deaths = 0;
+    db.query('UPDATE user_details SET kills = 0, deaths = 0 WHERE id = ?', [u.id]).catch((err) =>
+      console.error('shop: failed to persist kill/death reset:', err.message)
+    );
+    removeItem(db, u, itemCode);
+    return sendSuccess(socket, u, USE_ITEM);
+  }
+
+  if (itemCode === 'CB01') {
+    // Wire layout for this param is inferred from BUY_ITEM's own
+    // [action, code, ...] shape (9.3), not yet confirmed against a live
+    // capture - CLAUDE.md's rule (real client wins over the reference)
+    // applies here as soon as one is available.
+    const nickname = (pkt.blocks[2] || '').trim();
+    if (!NICKNAME_RE.test(nickname)) return sendError(socket, ERROR.INVALID_ITEM);
+    const renamed = await renameDisplayname(u, nickname);
+    if (!renamed) return sendError(socket, ERROR.CANNOT_BE_BOUGHT); // name taken - reference has no dedicated error code either
+    removeItem(db, u, itemCode);
+    return sendSuccess(socket, u, USE_ITEM);
+  }
+
+  // Any other code - matches the reference's still-unported cases (ham
+  // radio, random/gift boxes) by doing nothing, same as an unknown code.
+  return sendError(socket, ERROR.INVALID_ITEM);
+}
+
 // Ported from Itemshop.cs's Process(), validation order preserved exactly -
 // only the "already own a non-retail item" branch differs: the reference
 // renews it there (and does so by inserting a *second* user_inventory row
@@ -64,11 +143,8 @@ function handleItemshop(db) {
     if (!u) return;
 
     const actionType = Number(pkt.blocks[0]);
-    if (actionType !== BUY_ITEM) {
-      // USE_ITEM and anything else - matches the reference, which never
-      // implemented USE_ITEM either.
-      return sendError(socket, ERROR.INVALID_ITEM);
-    }
+    if (actionType === USE_ITEM) return handleUseItem(socket, db, u, pkt);
+    if (actionType !== BUY_ITEM) return sendError(socket, ERROR.INVALID_ITEM); // anything else - likely cheating, matches the reference
 
     const itemCode = (pkt.blocks[1] || '').toUpperCase();
     const lengthIdx = Number(pkt.blocks[4]);
@@ -101,4 +177,4 @@ function handleItemshop(db) {
   };
 }
 
-module.exports = { handleItemshop, ITEMSHOP, sendSuccess, grantItem };
+module.exports = { handleItemshop, ITEMSHOP, sendSuccess, grantItem, removeItem, setAuthDb };

@@ -7,6 +7,11 @@ services:
       - db_data:/var/lib/mysql
       - ./WarRock-Chapter-1-Server/Databases/LoginServer.SQL:/docker-entrypoint-initdb.d/01-login.sql:ro
       - ./WarRock-Chapter-1-Server/Databases/GameServer.SQL:/docker-entrypoint-initdb.d/02-game.sql:ro
+      - ./sql/03-activate-item-shop.sql:/docker-entrypoint-initdb.d/03-activate-item-shop.sql:ro
+      - ./sql/04-nickchange.sql:/docker-entrypoint-initdb.d/04-nickchange.sql:ro
+      - ./sql/05-boosters.sql:/docker-entrypoint-initdb.d/05-boosters.sql:ro
+      - ./sql/06-weapons.sql:/docker-entrypoint-initdb.d/06-weapons.sql:ro
+      - ./sql/07-activate-extra.sql:/docker-entrypoint-initdb.d/07-activate-extra.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p\"$$MARIADB_ROOT_PASSWORD\" --silent"]
       interval: 5s

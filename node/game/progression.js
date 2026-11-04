@@ -1,6 +1,7 @@
 // Fase 5 (livelli/XP) + Fase 6 (premium), ported from Core/LevelCalculator.cs,
 // Game/Enums/Premium.cs, Game/Entities/{User,Player}.cs and the `gameconfig`
 // table. Kept in one module since the XP formula is premium-rate-dependent.
+const { ownsItem } = require('./inventory');
 
 // EXPTable from Core/LevelCalculator.cs, verbatim (index = level-1, last
 // entry is a sentinel so level caps at 100).
@@ -122,6 +123,16 @@ function checkPremiumExpiry(db, user, nowSeconds = Math.floor(Date.now() / 1000)
   return true;
 }
 
+// CC03/CC04 (UP_EXP/UP_DINAR): real item codes, but never wired to any
+// multiplier in either C# reference - ToXiiC-Core's gameserver.xml even has
+// <EXPBonus>0.3</EXPBonus>/<DinarBonus>0.3</DinarBonus>, but no .cs file
+// reads them. Self-designed from here down (not a port - see the guide):
+// reusing those same 0.3 reference values rather than inventing new ones,
+// applied for as long as the item is owned (same leased-item mechanic as
+// everything else in the shop, no separate activate/consume step needed).
+const BOOSTER_XP_BONUS = 0.3;
+const BOOSTER_DINAR_BONUS = 0.3;
+
 // Ported from Player.cs's scoring branch + User.cs's EndGame(). points
 // defaults to 0 (a mid-match room-leave with no kills to show for it);
 // roundtimer.js's endRound() passes real kill counts now that those exist
@@ -129,8 +140,8 @@ function checkPremiumExpiry(db, user, nowSeconds = Math.floor(Date.now() / 1000)
 // only persists money from this path - persisting xp too is a deliberate
 // fix, otherwise levels would never survive a restart).
 function applyMatchEnd(db, user, points = 0) {
-  const expRate = 1 + premiumXpBonus(user.premium);
-  const dinarRate = 1;
+  const expRate = 1 + premiumXpBonus(user.premium) + (ownsItem(user.inventory, 'CC03') ? BOOSTER_XP_BONUS : 0);
+  const dinarRate = 1 + (ownsItem(user.inventory, 'CC04') ? BOOSTER_DINAR_BONUS : 0);
 
   const xpEarned = Math.ceil((20 + points * 4 * expRate) * GameConfig.expRate);
   const moneyEarned = Math.ceil((50 + points * 3 * dinarRate) * GameConfig.dinarRate);

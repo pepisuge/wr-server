@@ -15,6 +15,8 @@
 // are sent as fixed/derived values on the wire - documented per call site
 // below - rather than adding new columns for a v1 port.
 const { users } = require('./state');
+const { ownsItem, buildItemlist } = require('./inventory');
+const { removeItem } = require('./shop');
 
 // Lazy on purpose (called from inside functions below, not required at
 // module top): chat.js requires gm.js, which requires rooms.js, which
@@ -29,10 +31,10 @@ const CLAN_SYSTEM = 0x6710;
 const CLAN_RANKING = 0x6760;
 
 // Real subtype numbers from ToXiiC's CP_Clan.Subtype enum - NOT a design
-// choice, this is the actual wire protocol. ChangeAnnDec(8)/NickChange(12)/
-// MarkChange(14)/NewSearchClan(17) exist in the reference too but need an
-// item check (CB02/CB54) or a column this schema doesn't have - left
-// unhandled like any other out-of-scope subtype, same as before this fix.
+// choice, this is the actual wire protocol. NickChange(12) is now ported
+// (below, CB02). ChangeAnnDec(8)/MarkChange(14)/NewSearchClan(17) still need
+// a column this schema doesn't have (CB54 for MarkChange isn't even in
+// item_extra) - left unhandled like any other out-of-scope subtype.
 const SUB = {
   CHECK_NAME: 0,
   CREATE: 1,
@@ -45,6 +47,7 @@ const SUB = {
   JOIN_ACTION: 9,
   RANK_ACTION: 10,
   PROMOTE: 11,
+  NICK_CHANGE: 12, // renames the CLAN (item CB02) - unrelated to a player's own nickname (shop.js's CB01)
   DISBAND: 16,
   // Not a real subtype - out of the real 0-17 range on purpose. Clan war is
   // still self-designed (see handleStartWar below); previously this reused
@@ -160,6 +163,30 @@ function handleCheckName(socket, payload) {
   if (name.length <= 4) return;
   const exists = [...clans.values()].some((c) => c.name.toLowerCase() === name.toLowerCase());
   sendReply(socket, SUB.CHECK_NAME, [exists ? 62003 : 1]);
+}
+
+// Subtype 12 - Game/Clan.cs:404-428, item CB02. Ported as-is including the
+// reference's own quirk: if the new name is free but the caller doesn't own
+// CB02, nothing is sent back at all (not even an error) - the same silent
+// no-op as the reference, not "fixed" here.
+function handleNickChange(socket, db, payload) {
+  const u = socket.user;
+  if (!(u.clanId > 0)) return;
+  const clan = clans.get(u.clanId);
+  if (!clan) return;
+
+  const newName = (payload[0] || '').replace(/ /g, '');
+  if ([...clans.values()].some((c) => c.name.toLowerCase() === newName.toLowerCase())) {
+    return chat().sendSystemWhisper(socket, 'A clan has already this name, please choose another one');
+  }
+  if (!ownsItem(u.inventory, 'CB02')) return;
+
+  clan.name = newName;
+  persist(db, 'UPDATE clan SET name = ? WHERE id = ?', [newName, clan.id]);
+  removeItem(db, u, 'CB02');
+  // Real reply shape, Clan.cs's own Change(usr, true): [12, 1, itemlist] -
+  // confirms the item is gone, same idea as shop.js's own post-purchase resync.
+  sendReply(socket, SUB.NICK_CHANGE, [1, buildItemlist(u.inventory)]);
 }
 
 // Subtype 1 - Managers/ClanManager.cs:141-187. The `id` is left to the
@@ -527,6 +554,7 @@ function handleClanSystem(db) {
     if (subType === SUB.JOIN_ACTION) return handleJoinAction(socket, db, payload);
     if (subType === SUB.RANK_ACTION) return handleRankAction(socket, db, payload);
     if (subType === SUB.PROMOTE) return handlePromote(socket, db, payload);
+    if (subType === SUB.NICK_CHANGE) return handleNickChange(socket, db, payload);
     if (subType === SUB.DISBAND) return handleDisband(socket, db);
     if (subType === SUB.START_WAR) return handleStartWar(socket, db, payload);
   };

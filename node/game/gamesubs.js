@@ -422,12 +422,23 @@ function handleConfirmSpawn() {
 // Kills/deaths persist to user_details immediately (fire-and-forget, same
 // pattern as checkPremiumExpiry).
 //
-// ponytail: the reference also applies a distance-falloff tier
-// (Weapon.PowerPersonal, "Low/Middle/High") on top of this, but the 23-field
-// damage payload handled below has no distance/radius field to key it off
-// of - falls back to always using the closest tier (index 0), which is 100%
-// in every sampled row anyway, so this is equivalent to just using the raw
-// power. Upgrade if a distance field is ever identified in the payload.
+// The reference also applies a distance-falloff tier (Weapon.PowerPersonal,
+// "Low/Middle/High") on top of this, but the 23-field damage payload handled
+// below has no distance/radius field to key it off of - always uses the
+// closest tier (index 0). Confirmed against the full client catalog
+// (Data/items.bin, TARGET_INFO.PERSONAL - guide 17.5): index 0 is 100 for
+// nearly all guns, but not for knives/rockets (DJ/DK, 70-90) or vehicle-
+// mounted weapons (FB/FC/FD, 50-90) - PERSONAL_FALLOFF below holds only the
+// exceptions, everything else defaults to 1 (100%). Upgrade to the full
+// Low/Middle/High tiers if a distance field is ever identified in the
+// payload.
+const PERSONAL_FALLOFF = {
+  DJ01: 0.75, DJ02: 0.9, DJ03: 0.75, DJ04: 0.9, DK01: 0.7, DK02: 0.9,
+  DL01: 0.5, DL02: 0, DO01: 0, DO02: 0, DO03: 0, DP02: 0, DQ01: 0, DQ02: 0,
+  DQ03: 0, DR01: 0, DR02: 0, DS01: 0, DS02: 0, DS03: 0, DS05: 0, DU01: 0,
+  DV01: 0, DW02: 0, DW03: 0, DW04: 0, DX01: 0, DX02: 0, FA01: 0, FB01: 0.55,
+  FB03: 0.9, FB04: 0.9, FC01: 0.55, FC02: 0.5, FC03: 0.5, FD01: 0.7, FI02: 0.7,
+};
 //
 // Only the true head zone (1237) counts as a real headshot (icon/stat) -
 // the reference excludes knives/rockets even on a head hit (`GameMode.cs`:
@@ -465,7 +476,8 @@ function handlePlayerDamage(room, player, payload, u, db) {
   const weapon = String(payload[22] || '');
   const headshot = hsCalc === 1237 && !NO_HEADSHOT_WEAPON.test(weapon);
   const basePower = getItem(weapon)?.power || FALLBACK_POWER;
-  const damage = Math.round(basePower * (HITBOX_MULTIPLIER[hsCalc] ?? 0.75));
+  const falloff = PERSONAL_FALLOFF[weapon] ?? 1;
+  const damage = Math.round(basePower * falloff * (HITBOX_MULTIPLIER[hsCalc] ?? 0.75));
 
   const previousHealth = victim.health;
   victim.health = Math.max(0, victim.health - damage);
