@@ -156,3 +156,9 @@ Attenzione operativa: la riga aggiunta a `hosts` va su una riga propria (mancava
 
 ## I. VM self-update verified (2026-11-04)
 The VM's client 17 updated to 22 via launcher/updater against `tools/patch-server` (requests: updater.zip, PF_0_17..21.zip, launcher.zip, all 200). Requirements: VM hosts entries for login/patch.warrock.net -> host IP, launcher run as administrator. Next step: two-client match on client 22 to capture real spawn/UDP traffic.
+
+## J. Due client reali (client 22, host + VM) vs bot — 2026-11-04
+Con due client reali (host `wruser` slot 0, VM `wruser2` slot 4) **si vedono e si sparano**: il server/relay e' a posto. Header UDP tunnel 0x31 (29 byte, ground truth): `1010 0000 | sess(2) | room(2)=0 | 0000 | nonce(4, per client e per partita) | sub 31 00 | len 007e | 0000 0101 | target sess(2) | 0000 | slot DESTINATARIO(2) | a3`; corpo (XOR c3) = struct, `struct[0..1]` = slot mittente (LE a offset 1).
+Corretto nel bot (non ha bastato, bot ancora invisibile): slot destinatario in byte 26-27, nonce proprio (random) nei byte 10-13.
+Ricevitore client: `FUN_006b0d10` -> (0x3100) `+0x14` -> `FUN_005fd710` (richiede `DAT_00b8cbf8`,`DAT_00b8cc10` != 0) -> `FUN_005fd1a0` -> `FUN_005fd0e0`: scarta se slot==locale, **entita' dello slot mittente assente (`FUN_004eea90`)**, float non finiti, o `(entity+0x298==FUN_00461a30()) != (struct[0xb]==vtbl+0x38())`. Ipotesi aperte: manca l'entita' del bot (info/spawn TCP) oppure incoerenza di `struct[0xb]` (offset 22 corpo, vale 0/1 nei frame reali). Il metodo virtuale +0x14 reale non e' ancora stato individuato (base vtable 0x8e1fb8 ha stub vuoti).
+Prossimo passo: lettura memoria del client con bot in partita (entita' slot 4, `DAT_00b8cbf8/cc10`); lo script ps1 di campionamento va riscritto (OpenProcess 0x410 come `mem_poll.ps1`).
