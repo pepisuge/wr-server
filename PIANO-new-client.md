@@ -123,3 +123,19 @@ Accertato:
 - Formato corpo 0x31 (float XOR 0xc3, offset nel corpo dopo i 29 byte di header): X@29, altezza@33, Z@37 (+ copie precedenti @73/77/81 e @85/89/93), angoli @9/13/41.
 
 Non risolto: perche' il client non applica i frame di movimento del bot. Prossimi passi: (1) test con DUE client reali e confronto dei log (spawn, 0x7500, header/corpo UDP) col bot; (2) trovare il metodo virtuale del gestore UDP del client (`FUN_006b0d10` chiama `vtable+0x14`) e leggere cosa valida; (3) leggere il dump completo (`dump.ingame.txt`) dopo lo spawn del bot per capire dove finisce la posizione.
+
+### G.2 Aggiornamento (stesso giorno, dopo piu' giri con lettura memoria)
+
+Cambiamenti fatti per il bot / relay (tutti innocui, mantenuti):
+- `fake-client.js`: il bot spawna dopo lo spawn del giocatore reale; payload spawn `[0,0,0,1,1,..]`; copia l'header UDP reale; riscrive nel corpo dei frame `0x31/0x34` lo **slot mittente** (primi 2 byte della struttura, XOR 0xc3, LE) e sposta X di `BOT_OFFSET_X` (default 400).
+- `game/udp-handlers.js`: il relay parte dal socket su cui il *destinatario* ha fatto l'handshake (il client reale parla solo con la porta 5350, il bot usa 5351); log `[udp-handshake]` e contatori `[udp-relay/5s]` con porta sorgente/destinazione.
+
+Struttura del frame di movimento (client 22): corpo = `[len u16 LE][struct]`, len = `raw[28..29]` XOR 0xc3 (0x60 per 0x31, 0x30 per 0x34); `struct[0..1]` = slot mittente (rifiutato se == slot locale, `FUN_005fd0e0`); `struct+0x1c/0x20/0x24` = X/altezza/Z float; `FUN_005fd1a0` applica (primo frame: imposta `entity+0x184 = 1`, posizione in `entity+0x148..` ecc.), scrive `DAT_00c37f4c[slot*0x1a40]` = timestamp ricezione **dopo** la validazione.
+
+Verificato dal vivo (lettura memoria, client elevato): con tutte le correzioni sopra, `DAT_00c37f4c` dello slot del bot resta 0 ("never") e `entity+0x184 == 0`: **nessun frame del bot supera il ricevitore/validatore del client**. Il blocco e' quindi prima di `FUN_005fd1a0`: nel ricevitore UDP (`FUN_006b0d10` + metodo virtuale `+0x14`) o in `FUN_005fd0e0` (controllo di coerenza sul campo `struct[0xb]` e su `entity+0x298`).
+
+Non trovato: il metodo virtuale effettivo `+0x14` dell'oggetto di rete (i vtable `0x8c3790`, `0x8c37b0`, `0x8e1fb0` esaminati non sono quello giusto; `DAT_00bfc1e8` e' il gestore di gioco, non l'oggetto di rete).
+
+Metodo riutilizzabile: il client gira elevato -> script `ReadProcessMemory` lanciato con UAC (`Start-Process powershell -Verb RunAs`), campionamento su file; indirizzi chiave: `DAT_00bfc1e8`(mgr) `+0x4e324` = slot locale; array giocatori `0xc37e24 + slot*0x1a40`; tabella entita' `*DAT_010e743c`.
+
+Prossimo passo consigliato: test con DUE client reali (il server logga gia' handshake/UDP di entrambi) e confronto dei frame; oppure trovare l'oggetto di rete del client (costruttore del thread `FUN_006b21e0`) e leggerne i contatori.
