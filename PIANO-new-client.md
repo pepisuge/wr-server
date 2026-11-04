@@ -69,3 +69,32 @@ Lezione di metodo: il minidump (`tools/client22/minidump.py`) + stack + Ghidra h
 Aperti: la risposta LAUNCHER 0x1010 azzera `version.cfg` (Updater=0) - rispondere con le versioni reali; rendere il campo versione login configurabile; poi stanze/partita sul client 22 e sezione B.
 
 **Aggiornamento**: stanza creata e partita avviata (Start) dal client 22 con un bot `fake-client` come secondo giocatore: pacchetti di gioco (id 30000) e relay UDP regolari, zero errori server. `fake-client.js` allineato al campo versione (indici IP/porta +1).
+
+## E. Come funzionano download e installazione patch (WRLauncher / WRUpdater, client 22)
+
+Ricavato da stringhe + decompilazione Ghidra (`FUN_00402d90` nel launcher, `FUN_00403440` nell'updater). Le parti marcate (?) non sono verificate dal vivo.
+
+**Catena di processi**: `WRLauncher.exe` -> (se serve patch o sempre) `WRUpdater.exe %s` -> `System\Warrock.exe %s`. Gli `%s` sono argomenti passati da uno all'altro (?contenuto non verificato).
+
+**`version.cfg`** = stato locale, 6 interi nell'ordine `Format, Launcher, Updater, Client, Sub, Option` (client 22: 0/10/15/22/0/0). Stesso ordine del pacchetto `0x1010` di `login.warrock.net:5330`.
+
+**Launcher**
+1. Chiede a `login.warrock.net` il pacchetto 0x1010 (il nostro `LAUNCHER`): risposta = 6 versioni "attuali" + URL. In alternativa (flag, ?) scarica `version.txt` da `http://patch.warrock.net/k2network/warrock/` (URL cablato nell'exe) con WinInet (`InternetOpenUrlA`/`InternetReadFile`).
+2. Confronta con `version.cfg`:
+   - `Updater locale < Updater remoto` -> scarica `updater.zip`, lo decomprime nella cartella del gioco, poi scrive il nuovo `version.cfg`.
+   - **Poi copia SEMPRE l'Updater remoto sul locale e riscrive `version.cfg`**: per questo la vecchia risposta tutta a 0 azzerava `Updater` (0 non e' mai "piu' recente", quindi niente download, ma il file veniva sovrascritto).
+3. Avvia `WRUpdater.exe`.
+
+**Updater**
+- `Launcher locale < remoto` -> scarica `launcher.zip` (aggiorna il launcher).
+- **Client**: per ogni versione `v` da `Client locale` a `Client remoto - 1` scarica **`PF_<v>_<v+1>.zip`** (patch incrementali, una alla volta, riscrivendo `version.cfg` dopo ogni passo -> interrompibile e riprendibile).
+- Con `Client` uguale: se `Sub locale < Sub remoto` -> **`Sub<n>.zip`**.
+- `Option locale < remoto` -> **`optpatch.zip`**.
+- Poi **elimina i vecchi file** ("Delete old version files!") e lancia `System\Warrock.exe`.
+- Formato zip: decompressione zlib 1.2.3 interna; controlli "header crc mismatch" / "incompatible version" (le patch hanno un header con CRC; nome magico `FSCRC0` visto nelle stringhe).
+- Messaggi di errore utili: "Cannot get a file", "Cannot download a target file!", "Cannot write to a local version file !".
+
+**Per il nostro server privato**
+- Con `PATCH_VERSIONS` uguale a `version.cfg` (0,10,15,22,0,0) il launcher non scarica nulla: e' la configurazione attuale e va bene.
+- **Attenzione**: se `version.cfg` locale ha `Updater` < valore del server (es. 0 contro 15) il launcher tenta di scaricare `updater.zip` da `patch.warrock.net` (host inesistente -> errore). Tenere `version.cfg` e `PATCH_VERSIONS` allineati.
+- Per *distribuire* patch ai propri client servirebbe: `hosts` che punti `patch.warrock.net` a 127.0.0.1 (o altro host), un server HTTP statico con `/k2network/warrock/version.txt` e gli zip `PF_22_23.zip` ecc. nel formato col CRC header, e `PATCH_VERSIONS` con Client = 23. Non implementato: non serve finche' usiamo un solo client modificato a mano.
