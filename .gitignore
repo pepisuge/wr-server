@@ -12,3 +12,6 @@ node_modules/
 
 # Real DB credentials for docker-compose - only .env.example is committed.
 .env
+
+# Generated patch packages (hundreds of MB) - rebuild with re-tools build script, see PIANO-new-client.md section H
+tools/patch-server/wr/*.zip

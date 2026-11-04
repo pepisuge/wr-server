@@ -38,7 +38,9 @@ function sha256(str) {
 const PATCH_VERSIONS = [0, 10, 15, 22, 0, 0];
 
 function handleLauncher(socket) {
-  socket.sendPacket(LAUNCHER, [...PATCH_VERSIONS, process.env.WR_PATCH_URL || 'http://']);
+  // Patch base URL: the address this client used to reach us (works from a VM / LAN, same trick as the game server IP)
+  // serving tools/patch-server on port 80; WR_PATCH_URL overrides it.
+  socket.sendPacket(LAUNCHER, [...PATCH_VERSIONS, process.env.WR_PATCH_URL || `http://${localIp(socket)}/wr/`]);
   socket.end();
 }
 
