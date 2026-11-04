@@ -120,12 +120,28 @@ function handleTunnel(socket, msg, rinfo) {
 
   const sender = users.get(sessionId);
   const target = users.get(targetId);
-  if (!sender || !target || sender.roomId !== roomId || target.roomId !== roomId) return;
+  if (!sender || !target || sender.roomId !== roomId || target.roomId !== roomId) return countRelay(sessionId, targetId, 'drop:no-sender/target/room');
 
   const room = getChannel(sender.channel).rooms.get(roomId);
-  if (!room || room.state !== 2) return; // Playing
+  if (!room || room.state !== 2) return countRelay(sessionId, targetId, 'drop:not-playing'); // Playing
 
-  if (target.udpEndpoint) socket.send(msg, target.udpEndpoint.port, target.udpEndpoint.address);
+  if (!target.udpEndpoint) return countRelay(sessionId, targetId, 'drop:no-udp-endpoint');
+  socket.send(msg, target.udpEndpoint.port, target.udpEndpoint.address);
+  countRelay(sessionId, targetId, `sent->${target.udpEndpoint.address}:${target.udpEndpoint.port}`);
+}
+
+// Per sender->target counters, printed every 5s: tells at a glance whether a peer's packets are
+// being relayed to the other client or silently dropped (and why).
+const relayStats = new Map();
+let relayTimer = null;
+function countRelay(from, to, what) {
+  const key = `${from}->${to} ${what}`;
+  relayStats.set(key, (relayStats.get(key) || 0) + 1);
+  if (relayTimer) return;
+  relayTimer = setInterval(() => {
+    if (relayStats.size) console.log(`[udp-relay/5s] ${[...relayStats].map(([k, n]) => `${k} x${n}`).join(' | ')}`);
+    relayStats.clear();
+  }, 5000);
 }
 
 function handleUdpPacket(socket, msg, rinfo, port) {
