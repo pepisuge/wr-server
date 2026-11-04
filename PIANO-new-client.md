@@ -50,3 +50,20 @@ Metodo: catturare ogni passo dai log (`auth-server.log`, `game-server.log`), con
 1. Lanciare il launcher del nuovo client **senza modifiche** e leggere i log: ogni errore ci dice quale punto di A si applica.
 2. Correggere un punto alla volta (probabile ordine: 3 → 4 → 5 → 6), un commit per fix, aggiornando `Protocollo WarRock.md`.
 3. Solo dopo che il flusso lobby→stanza→partita funziona sul 22: sezione B (sicurezza prima, poi refactoring).
+
+## D. Esito (2026-11-04) - client 22 raggiunge la lobby
+
+Verificato dal vivo con client reale: login `wruser`, lista server, lobby, ping stabili. Nessun errore server.
+
+Cosa serviva (nessuna DLL sostitutiva: l'SDK HackShield e' linkato staticamente in `WarRock.exe`, non c'e' nulla da sostituire):
+1. **`WarRock.exe` patchato** con `tools/client22/patch22.py` (ogni patch controlla i byte originali; backup in `WarRock.exe.orig`):
+   - `UpdateHS` (0x5c5ac0) -> ritorna 1: l'originale aspettava fino a 10 min `HSUpdate.exe` (server AhnLab morti) e poi usciva.
+   - `Monitoring` (0x5c5b10) no-op, wrapper start/stop service (0x5c5df0) -> ritorna 1.
+   - CRC `FileCRCListDoc`: `75`->`EB` a 0x70ca11 (file offset 0x30ca11).
+   - **`FUN_00824c9c` = `Direct3DCreate8` instradato dentro HackShield** (id 0x1f): con HackShield spento ritorna 0 -> "Could not initialize Direct3D" -> crash. Riscritto per chiamare l'import reale `d3d8.dll` (IAT 0x8be558, `ret 4`).
+2. **Server**: `auth/handlers.js` ora invia il campo versione `1.11025` dopo `user.status` (il client 22 lo richiede, il 17.x no -> il vecchio client non e' piu' compatibile finche' non diventa configurabile).
+3. Inutili ma innocui: `Engine.ini` 1024x768x32, preferenza GPU NVIDIA per l'exe (rimuovibile in `HKCU\Software\Microsoft\DirectX\UserGpuPreferences`).
+
+Lezione di metodo: il minidump (`tools/client22/minidump.py`) + stack + Ghidra headless ha dato la causa in pochi passi; l'ipotesi "16 bit / GPU" era sbagliata e il messaggio d'errore a schermo (screenshot) ha chiuso il caso.
+
+Aperti: la risposta LAUNCHER 0x1010 azzera `version.cfg` (Updater=0) - rispondere con le versioni reali; rendere il campo versione login configurabile; poi stanze/partita sul client 22 e sezione B.

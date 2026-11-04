@@ -93,7 +93,8 @@ function createHandlers(db) {
     // but this client build (17.2) showed a field-shifted, garbled server
     // list when we included it - dropped until we confirm what this client
     // actually expects at this position.
-    const fields = [1, user.id, 0, username, 'NULL', user.displayname, sessionId, 1, 0, user.status, servers.length];
+    // Client 22 expects the C# reference's "1.11025 // PF_20" version field here (client 17 didn't).
+    const fields = [1, user.id, 0, username, 'NULL', user.displayname, sessionId, 1, 0, user.status, 1.11025, servers.length];
     const gameIp = localIp(socket);
     for (const s of servers) fields.push(s.id, s.name, gameIp, PORTS.game, s.playerCount, s.type);
     fields.push(-1, -1, -1, -1, 0, 0);
