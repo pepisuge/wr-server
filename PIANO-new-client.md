@@ -153,3 +153,6 @@ Regole ricavate (decompilato + prova):
 Strumenti nel repo: `tools/patch-server/patch-server.js` (server HTTP statico, serve `./wr/`, logga ogni richiesta), `WR_PATCH_URL` (variabile d'ambiente del login) per l'URL nel pacchetto 0x1010.
 
 Attenzione operativa: la riga aggiunta a `hosts` va su una riga propria (mancava il newline finale: la prima volta si e' fusa con `login.warrock.net` e l'ha rotta).
+
+## I. VM self-update verified (2026-11-04)
+The VM's client 17 updated to 22 via launcher/updater against `tools/patch-server` (requests: updater.zip, PF_0_17..21.zip, launcher.zip, all 200). Requirements: VM hosts entries for login/patch.warrock.net -> host IP, launcher run as administrator. Next step: two-client match on client 22 to capture real spawn/UDP traffic.
