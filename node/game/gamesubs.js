@@ -733,6 +733,7 @@ function handleUseItem(room, player, payload) {
   if (code === 'DU02' && (item.owner === player.slot || (room.mode !== FFA_MODE && item.team === player.team))) return null;
   room.groundItems.delete(id);
   const out = padded(payload, 7);
+  let others;
   switch (code) {
     case 'DS05': // flash mine, ammo box
     case 'DU01':
@@ -740,15 +741,17 @@ function handleUseItem(room, player, payload) {
     case 'DU02': // land mine
       player.health = player.health >= 500 ? player.health - 300 : 200;
       out[6] = player.health;
+      others = [...out]; others[6] = 0; // observed live: another client lost health when the stepper's value arrived in field 6
       break;
     case 'DV01': // medic box
       player.health = Math.min(1000, player.health + 400);
       out[6] = player.health;
+      others = [...out]; others[6] = 0;
       break;
     default:
       return null;
   }
-  return { payload: out };
+  return { payload: out, othersPayload: others };
 }
 
 function handleArtillery(room, player, payload, u) {
@@ -920,7 +923,13 @@ function handleGamePacket(socket, pkt, db) {
   const sockets = result.selfTarget
     ? [socket]
     : roomSockets(room);
-  broadcastPacket(sockets, XOR.external, GAME_PACKET, fields);
+  if (result.othersPayload) {
+    // the sender gets the full reply, everyone else a variant (e.g. without the sender's health, which another client may apply to itself)
+    broadcastPacket([socket], XOR.external, GAME_PACKET, fields);
+    broadcastPacket(sockets.filter((x) => x !== socket), XOR.external, GAME_PACKET, [...fields.slice(0, 5), ...result.othersPayload]);
+  } else {
+    broadcastPacket(sockets, XOR.external, GAME_PACKET, fields);
+  }
 
   if (result.updateLobby) sendRoomUpdateToLobby(room, true);
   if (result.checkAutoStart) tryAutoStart(room);
