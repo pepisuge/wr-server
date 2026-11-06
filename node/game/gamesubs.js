@@ -713,7 +713,7 @@ function handlePlaceItem(room, player, payload, u) {
   room.groundItems ??= new Map();
   room.groundNext = (room.groundNext || 0) + 1;
   const id = room.groundNext - 1;
-  room.groundItems.set(id, { code, owner: player.slot });
+  room.groundItems.set(id, { code, owner: player.slot, team: player.team });
   const out = [...payload];
   out[4] = id;
   return { payload: out };
@@ -723,9 +723,14 @@ function handleUseItem(room, player, payload) {
   if (room.state !== 2 || !player.alive) return null;
   logFirst('UseItemOnGround', payload);
   const id = Number(payload[4]);
-  if (!room.groundItems?.delete(id)) return null;
+  const item = room.groundItems?.get(id);
+  if (!item) return null;
+  const code = String(payload[payload.length - 1] || '').toUpperCase();
+  // a land mine only hurts enemies: not its owner, and not teammates outside FFA (the item stays where it is)
+  if (code === 'DU02' && (item.owner === player.slot || (room.mode !== FFA_MODE && item.team === player.team))) return null;
+  room.groundItems.delete(id);
   const out = padded(payload, 7);
-  switch (String(payload[payload.length - 1] || '').toUpperCase()) {
+  switch (code) {
     case 'DS05': // flash mine, ammo box
     case 'DU01':
       break;
