@@ -5,7 +5,7 @@
 // any client-supplied field - the client's own Authorization packet carries
 // an AccessLevel byte, but nothing here validates it, so it can't be used
 // to grant GM powers safely.
-const { users, getChannel } = require('./state');
+const { users, getChannel, roomSockets } = require('./state');
 const { xpForLevel, levelForXp } = require('./progression');
 const { handleRoomSpectate, removeFromRoom, notifyLobbyAfterLeave, sendRoomUpdateToLobby, ROOM_LEAVE, ROOM_KICK } = require('./rooms');
 const { endRound } = require('./roundtimer');
@@ -453,6 +453,20 @@ function cmdChangeMap(socket, db, args) {
 
 // Ported from ToXiiC-Core's "endgame" - forces the current match to end,
 // same payout/reset path a real win condition takes (roundtimer.js).
+// Starts the match of the GM's own room as if its master had pressed Start (same checks: everyone ready, 2+ players,
+// balanced teams). Lazy require: gamesubs.js loads rooms.js, which this module also needs.
+function cmdStart(socket, db) {
+  const { HANDLERS, SUB, GAME_PACKET } = require('./gamesubs');
+  const u = socket.user;
+  const room = u.roomId === null ? null : getChannel(u.channel).rooms.get(u.roomId);
+  if (!room || room.state !== 1) return reply(socket, 'Devi essere in una stanza in attesa.');
+  const master = [...room.players.values()].find((p) => p.slot === room.master);
+  const r = master && HANDLERS[SUB.START](room, master, [0, 0, 0], u, db);
+  if (!r) return reply(socket, 'Impossibile avviare: servono 2+ giocatori pronti e squadre bilanciate.');
+  broadcastPacket(roomSockets(room), XOR.external, GAME_PACKET, [1, master.slot, room.id, 2, r.newType, ...r.payload]);
+  sendRoomUpdateToLobby(room, true);
+}
+
 function cmdEndGame(socket, db, args) {
   const u = socket.user;
   if (u.roomId === null) return reply(socket, 'Devi essere in una stanza.');
@@ -576,6 +590,7 @@ const HELP_COMMANDS = [
   '/closeroom <id>',
   '/maps',
   '/map <id>',
+  '/start',
   '/endgame',
   '/extendtime <minuti>',
   '/online',
@@ -608,6 +623,7 @@ const COMMANDS = {
   closeroom: cmdForceCloseRoom,
   maps: cmdMaps,
   map: cmdChangeMap,
+  start: cmdStart,
   endgame: cmdEndGame,
   extendtime: cmdExtendTime,
   online: cmdWho,
