@@ -7,6 +7,7 @@ const { clanInfo } = require('./clan');
 
 const ROOM_CREATION = 0x7300;
 const ROOM_JOIN = 0x7310;
+const ROOM_QUICK_JOIN = 0x7320;
 const ROOM_LEAVE = 0x7340;
 const ROOM_KICK = 0x7341;
 const ROOM_INVITE = 0x7350;
@@ -275,6 +276,20 @@ function createClanWarRoom(challenger, opponentClanId) {
   challenger.socket.sendPacket(ROOM_CREATION, [1, 0, ...roomInfoFields(room)]);
   sendRoomUpdateToLobby(room, false);
   return room;
+}
+
+// Ported from Handlers/RoomQuickJoin.cs: a random room of the player's channel that has space, no password and a
+// level limit they meet, then the normal join path. The reference stays silent when nothing fits; we answer with the
+// generic join error so the client doesn't hang.
+function handleRoomQuickJoin(socket) {
+  const u = socket.user;
+  if (!u || u.roomId !== null) return;
+  const level = levelForXp(u.xp);
+  const fits = [...getChannel(u.channel).rooms.values()].filter(
+    (r) => r.players.size < r.maxPlayers && !r.userLimit && !r.hasPassword && suitableLevel(r.levelLimit, level)
+  );
+  if (!fits.length) return socket.sendPacket(ROOM_JOIN, [94010]);
+  handleRoomJoin(socket, { blocks: [fits[Math.floor(Math.random() * fits.length)].id, ''] });
 }
 
 // Ported from Game/Handlers/RoomJoin.cs + Room.Add. Skips level-limit gating.
@@ -649,6 +664,7 @@ function handleRoomInvite(socket, pkt) {
 module.exports = {
   handleRoomCreation,
   handleRoomJoin,
+  handleRoomQuickJoin,
   handleRoomLeave,
   handleRoomListRequest,
   handleRoomKick,
@@ -662,6 +678,7 @@ module.exports = {
   notifyLobbyAfterLeave,
   ROOM_CREATION,
   ROOM_JOIN,
+  ROOM_QUICK_JOIN,
   ROOM_LEAVE,
   ROOM_KICK,
   ROOM_INVITE,

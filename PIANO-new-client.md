@@ -211,7 +211,7 @@ Confronto sottocomandi di gioco (0x7530) riferimento vs Node (`game/gamesubs.js`
 - Veicoli: `200 EnterVehicle`, `201 ChangeVehicleSeat`, `202 LeaveVehicle` (+ `Entities/Vehicle.cs`, 177 righe; `0x`-pacchetto `LeaveVehicle`/`VehicleRepair`).
 - Conquest: `156 FlagCapture` + `Modes/Conquest.cs` (191 righe); in Node solo mappe/indici (`maps.js`), nessun gameplay di bandiere.
 - Oggetti a terra: `400 PlaceItemOnGround`, `401 UseItemOnGround` (kit, mine...), `159 Artillery`, `61 Votekick`.
-- Pacchetti non-subcomando: `RoomQuickJoin 0x7320`, `RoomSpectate 0x7330`, `SpectatorInfo 0x7501`, `MapData 0x7510`, `Markt 0x7700`, `UpdateInventory 0x7900`, `CMDFindPlayer 0x6011`, `CLAN_QUICK_JOIN 0x7360` (il client 22 li registra, Node no).
+- Pacchetti non-subcomando (RoomQuickJoin 0x7320 FATTO e verificato col bot; RoomSpectate 0x7330 non fatto: il client 22 manda [byte, numero, password|NULL] da FUN_004694c0): `RoomSpectate 0x7330`, `SpectatorInfo 0x7501`, `MapData 0x7510`, `Markt 0x7700`, `UpdateInventory 0x7900`, `CMDFindPlayer 0x6011`, `CLAN_QUICK_JOIN 0x7360` (il client 22 li registra, Node no).
 Definiti ma senza handler: `4 StartReply`, `152 PlayerDeath`, `403 StartMission` (sono risposte/uscite, non richieste).
 Prima di implementare ognuno va verificato che il client 22 usi lo stesso numero (come per il coupon: 0x8100 era sbagliato) leggendo le sue funzioni di invio.
 

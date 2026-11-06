@@ -1,5 +1,5 @@
 const { users } = require('./state');
-const { handleRoomCreation, handleRoomJoin, handleRoomLeave, handleRoomListRequest, handleRoomKick, handleRoomInvite, removeFromRoom, notifyLobbyAfterLeave, sendRoomList, ROOM_CREATION, ROOM_JOIN, ROOM_LEAVE, ROOM_KICK, ROOM_INVITE, ROOM_LIST } = require('./rooms');
+const { handleRoomCreation, handleRoomJoin, handleRoomQuickJoin, handleRoomLeave, handleRoomListRequest, handleRoomKick, handleRoomInvite, removeFromRoom, notifyLobbyAfterLeave, sendRoomList, ROOM_CREATION, ROOM_JOIN, ROOM_QUICK_JOIN, ROOM_LEAVE, ROOM_KICK, ROOM_INVITE, ROOM_LIST } = require('./rooms');
 const { handleChat, CHAT } = require('./chat');
 const { handleGamePacket, GAME_PACKET, handleScoreboardRequest, SCOREBOARD } = require('./gamesubs');
 const { handleExplosivesPacket, EXPLOSIVES } = require('./explosive');
@@ -203,6 +203,7 @@ function createHandlers(db) {
     [USER_LIST]: handleUserList,
     [ROOM_CREATION]: handleRoomCreation,
     [ROOM_JOIN]: handleRoomJoin,
+    [ROOM_QUICK_JOIN]: handleRoomQuickJoin,
     [ROOM_LEAVE]: (socket) => handleRoomLeave(socket, db),
     [ROOM_KICK]: handleRoomKick,
     [ROOM_INVITE]: handleRoomInvite,
