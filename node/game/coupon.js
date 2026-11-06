@@ -4,7 +4,9 @@
 const { ownsItem } = require('./inventory');
 const { sendSuccess: sendShopSuccess, grantItem } = require('./shop');
 
-const COUPON = 0x8100; // same id both ways, matches this project's usual convention (Chat, Equipment, RoomJoin, ...)
+// Client 22's packet table (FUN_005fefa0) registers 0x7910 (and 0x7920 level-up) and has NO 0x8100: PF-20's 0x8100 is wrong for it.
+// SGMartin/Servidor-Chapter-1-WarRock (PF-23) uses 0x7910 too. Same id both ways, as for Chat, Equipment, RoomJoin, ...
+const COUPON = 0x7910;
 
 // code -> { id, code, uses, dinarReward, itemReward: [{code, days}] }
 const coupons = new Map();
