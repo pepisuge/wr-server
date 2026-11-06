@@ -17,7 +17,7 @@ function connectToAuthServer(config) {
     console.log(`Internal IN tick=${pkt.tick} id=${pkt.id} blocks=[${pkt.blocks.join(', ')}]`);
 
     if (pkt.id === CONNECTION) {
-      socket.sendPacket(AUTHORIZATION, [1, config.serverKey, `${config.serverName} `, config.serverIp, PORTS.game, 0]);
+      socket.sendPacket(AUTHORIZATION, [1, config.serverKey, `${config.serverName} `, config.serverIp, PORTS.game, Number(process.env.WR_SERVER_TYPE) || 0]); // WR_SERVER_TYPE=65..70: client 22 "A..F" channel UI (test)
     } else if (pkt.id === AUTHORIZATION) {
       const [errorCode, serverId] = pkt.blocks;
       if (Number(errorCode) === 1) {

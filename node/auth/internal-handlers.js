@@ -1,4 +1,4 @@
-const { registerServer } = require('./server-manager');
+const { registerServer, unregisterServer } = require('./server-manager');
 
 const AUTHORIZATION = 0x1000;
 
@@ -13,6 +13,7 @@ function handleAuthorization(socket, pkt) {
     return;
   }
   const serverId = registerServer(name.trim(), ip, Number(type));
+  socket.on('close', () => unregisterServer(serverId)); // a restarted game server must not leave a stale list entry behind
   socket.sendPacket(AUTHORIZATION, [1, serverId]);
   console.log(`Internal: registered game server "${name.trim()}" as id ${serverId}`);
 }
