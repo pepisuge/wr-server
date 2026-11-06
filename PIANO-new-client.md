@@ -214,3 +214,8 @@ Confronto sottocomandi di gioco (0x7530) riferimento vs Node (`game/gamesubs.js`
 - Pacchetti non-subcomando: `RoomQuickJoin 0x7320`, `RoomSpectate 0x7330`, `SpectatorInfo 0x7501`, `MapData 0x7510`, `Markt 0x7700`, `UpdateInventory 0x7900`, `CMDFindPlayer 0x6011`, `CLAN_QUICK_JOIN 0x7360` (il client 22 li registra, Node no).
 Definiti ma senza handler: `4 StartReply`, `152 PlayerDeath`, `403 StartMission` (sono risposte/uscite, non richieste).
 Prima di implementare ognuno va verificato che il client 22 usi lo stesso numero (come per il coupon: 0x8100 era sbagliato) leggendo le sue funzioni di invio.
+
+### P.1 Fatto: Heal (101) e EnvironmentDamage (500) — 2026-11-06
+`game/gamesubs.js`: `handleHeal` (medikit DQ01/02/03 = 300/450/600, HP kit DS10 = 200, adrenalina DS01 porta a 400 altrimenti +100, torre 400, solo stessa squadra; assist non tracciati) e `handleEnvironmentDamage` (danno non letale = stesso sottocomando con `[7]=danno, [8]=salute`; letale = Suicide 157 con lo slot in `[2]`, morte registrata come suicidio). Gli oggetti sono riconosciuti per CODICE tramite `items.codeById` (ids del DB = quelli del client 22: 77/78/79, 80/81, 82). Prova automatica: `node tools/test-gamesubs.js`. I sottocomandi non gestiti ora vengono loggati una volta (`[game] unhandled sub N payload=[...]`) per vedere i formati veri del client.
+Non fatto: `102 Repair` (serve la logica dei veicoli, assenti) e il ramo veicolo di EnvironmentDamage.
+**Da verificare dal vivo:** i campi esatti di 500 non sono mai stati catturati (nessuna riga nei log); se il client 22 li ha in altre posizioni, il log `unhandled`/i dati mostreranno la differenza.

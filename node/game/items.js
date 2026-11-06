@@ -9,6 +9,7 @@ const SLOTS = 8;
 // the starting loadout every class begins with.
 const DEFAULT_ITEMS = new Set(['DA02', 'DB01', 'DF01', 'DG05', 'DC02', 'DJ01', 'DR01', 'DQ01', 'DN01', 'DL01']);
 
+const BY_ID = new Map(); // numeric weapon id (what the client sends in WeaponSwitch, item_weapons.id) -> code
 const ITEMS = new Map(); // code -> { code, active, name, isWeapon, buyable, reqLevel, reqPremium, cost[5], power, slots[5][8], canEquip6th }
 
 function parseCsvNumbers(csv) {
@@ -45,7 +46,7 @@ function toItem(row) {
 
 async function loadItems(db) {
   const [weapons] = await db.query(`
-    SELECT w.code, w.active, w.name, 1 AS is_weapon,
+    SELECT w.id, w.code, w.active, w.name, 1 AS is_weapon,
            s.buyable, s.req_level, s.req_premium, s.cost,
            e.class1, e.class2, e.class3, e.class4, e.class5,
            t.power
@@ -62,9 +63,11 @@ async function loadItems(db) {
   `);
 
   ITEMS.clear();
+  BY_ID.clear();
   for (const row of [...weapons, ...extras]) {
     const item = toItem(row);
     ITEMS.set(item.code, item);
+    if (row.is_weapon) BY_ID.set(Number(row.id), item.code);
   }
   console.log(`Items: loaded ${ITEMS.size} catalog entries.`);
 }
@@ -83,4 +86,9 @@ function isEquipEligible(code, classIdx, slotIdx) {
   return item.slots[classIdx][slotIdx];
 }
 
-module.exports = { loadItems, getItem, isEquipEligible, DEFAULT_ITEMS, CLASSES, SLOTS };
+// The client identifies the weapon in hand by numeric id; Heal/Repair rules are keyed by code (ids shift between patches).
+function codeById(id) {
+  return BY_ID.get(Number(id));
+}
+
+module.exports = { loadItems, getItem, codeById, isEquipEligible, DEFAULT_ITEMS, CLASSES, SLOTS };

@@ -6,7 +6,7 @@ const { startRoundTimer, checkWinCondition, endRound, scoreboardValues } = requi
 const { getMap } = require('./maps');
 const { initExplosiveMatch } = require('./explosive');
 const { broadcastSystemMessage } = require('./chat');
-const { getItem } = require('./items');
+const { getItem, codeById } = require('./items');
 const { record } = require('./record');
 
 const GAME_PACKET = 0x7530;
@@ -55,6 +55,8 @@ const SUB = {
   START_MISSION: 403,
   PLAYER_DAMAGE: 103,
   PLAYER_DEATH: 152,
+  HEAL: 101,
+  ENVIRONMENT_DAMAGE: 500,
   CONFIRM_DEATH: 154,
   BACK_TO_LOBBY: 9,
   AMMO_RECHARGE: 105,
@@ -641,9 +643,8 @@ function handleAmmoRecharge(room, player) {
 // with no killer - no kill credited to anyone and no ticket pool touched
 // (TeamDeathMatch.OnPlayerSuicide is a separate hook from OnDeath), so it
 // can't trigger checkWinCondition on its own.
-function handleSuicide(room, player, payload, u, db) {
-  if (room.state !== 2 || !player.alive || room.mode === FFA_MODE || room.mode === 0) return null;
-
+// A death with no killer (also what lethal environment damage ends in): deaths+1, persisted.
+function suicideDeath(player, u, db) {
   player.health = 0;
   player.alive = false;
   player.deaths += 1;
@@ -651,10 +652,58 @@ function handleSuicide(room, player, payload, u, db) {
   db.query('UPDATE user_details SET deaths = deaths + 1 WHERE id = ?', [player.userId]).catch((err) =>
     console.error('Suicide: failed to persist death:', err.message)
   );
+}
 
+function handleSuicide(room, player, payload, u, db) {
+  if (room.state !== 2 || !player.alive || room.mode === FFA_MODE || room.mode === 0) return null;
+
+  suicideDeath(player, u, db);
   const out = [...payload];
   out[2] = player.slot;
   out[3] = 0;
+  return { payload: out };
+}
+
+// Ported from Handlers/Game/Ingame/EnvironmentDamage.cs: damage from world physics (falls, water, leaving the playable
+// zone), reported by the client itself. payload[2] entity type (1 = player, 0 = vehicle), [5] damage. A lethal hit is
+// broadcast as a Suicide (157) with the slot in [2], like the reference. Vehicle damage is skipped: no vehicles yet.
+function handleEnvironmentDamage(room, player, payload, u, db) {
+  if (room.state !== 2 || !player.alive || Number(payload[2]) !== 1) return null;
+  const damage = Number(payload[5]);
+  if (!(damage > 0)) return null;
+
+  const out = [...payload];
+  out[7] = damage;
+  if (player.health > damage) {
+    player.health -= damage;
+    out[8] = player.health;
+    return { payload: out };
+  }
+  suicideDeath(player, u, db);
+  out[2] = player.slot;
+  out[8] = 0;
+  return { newType: SUB.SUICIDE, payload: out };
+}
+
+// Ported from Handlers/Game/Ingame/Heal.cs. payload[2] target slot, [3] 1 = healing tower. Amount by the healer's
+// weapon: medic kits 300/450/600, HP kit 200, adrenaline tops up to 400 (else +100), tower 400. Same team only; the
+// reference's assist counter is not tracked here. Items are matched by code (their numeric ids differ between patches).
+const HEAL_KIT = { DQ01: 300, DQ02: 450, DQ03: 600, DS10: 200 };
+function handleHeal(room, player, payload) {
+  if (room.state !== 2 || !player.alive) return null;
+  let target = [...room.players.values()].find((p) => p.slot === Number(payload[2]));
+  if (!target || target.health >= 1000 || target.team !== player.team) return null;
+  if (room.mode === FFA_MODE) target = player;
+
+  const code = codeById(player.weapon);
+  let amount;
+  if (Number(payload[3]) === 1) amount = 400;
+  else if (code === 'DS01') amount = target.health < 400 ? 400 - target.health : 100;
+  else amount = HEAL_KIT[code] ?? 0;
+
+  target.health = Math.min(1000, target.health + amount);
+  const out = [...payload];
+  out[3] = target.health;
   return { payload: out };
 }
 
@@ -737,6 +786,8 @@ const HANDLERS = {
   [SUB.WEAPON_SWITCH]: handleWeaponSwitch,
   [SUB.AMMO_RECHARGE]: handleAmmoRecharge,
   [SUB.SUICIDE]: handleSuicide,
+  [SUB.HEAL]: handleHeal,
+  [SUB.ENVIRONMENT_DAMAGE]: handleEnvironmentDamage,
   [SUB.ROUND_END_CONFIRM]: handleRoundEndConfirm,
 };
 
@@ -745,6 +796,7 @@ const HANDLERS = {
 // header (sender slot, room id, an unidentified passthrough field, sub-type)
 // followed by a sub-type-specific payload. The reply mirrors that shape and
 // is normally broadcast to the whole room, sender included.
+const unhandledSeen = new Set();
 function handleGamePacket(socket, pkt, db) {
   const u = socket.user;
   if (!u || u.roomId === null) return;
@@ -762,7 +814,11 @@ function handleGamePacket(socket, pkt, db) {
   if (!player || player.slot !== roomSlot) return;
 
   const handler = HANDLERS[subType];
-  if (!handler) return; // unrecognized/out-of-scope sub-type - silently ignored, matches Fase 4's GamePacket note
+  if (!handler) {
+    // unrecognized/out-of-scope sub-type: ignored (Fase 4's GamePacket note), but logged once so its real format is visible
+    if (!unhandledSeen.has(subType)) { unhandledSeen.add(subType); console.log(`[game] unhandled sub ${subType} payload=[${payload.join(', ')}]`); }
+    return;
+  }
 
   // The header's slot reflects who sent the packet (their slot *before* the
   // handler runs) - SideUpdate moves the player to a new slot as a side
@@ -783,4 +839,4 @@ function handleGamePacket(socket, pkt, db) {
   if (result.checkAutoStart) tryAutoStart(room);
 }
 
-module.exports = { handleGamePacket, GAME_PACKET, handleScoreboardRequest, SCOREBOARD };
+module.exports = { handleGamePacket, GAME_PACKET, handleScoreboardRequest, SCOREBOARD, HANDLERS, SUB };
