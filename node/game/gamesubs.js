@@ -811,6 +811,15 @@ function handleGamePacket(socket, pkt, db) {
   const room = getChannel(u.channel).rooms.get(u.roomId);
   if (!room || room.id !== roomId) return;
 
+  // A spectator's client asks for the mission data like a player does when its scene loads; without the reply it crashes.
+  if (room.spectators?.has(u.sessionId)) {
+    if (subType === SUB.GET_MISSION) {
+      const m = handleGetMission(room, null, payload);
+      if (m) socket.sendPacket(GAME_PACKET, [1, roomSlot, room.id, unknown, m.newType, ...m.payload]);
+    }
+    return;
+  }
+
   const player = room.players.get(u.sessionId);
   if (!player || player.slot !== roomSlot) return;
 
