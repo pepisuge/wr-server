@@ -112,7 +112,15 @@ function startUdpKeepalive() {
 // works out to the same value as a direct big-endian read at offset 4).
 // Both players must be confirmed in the same *Playing* room - otherwise
 // this would be a free relay for anyone who guesses two session ids.
+// WR_UDP_DUMP=<file>: append EVERY tunnel packet as JSON lines (t ms, sender session, sub, hex) - raw material for
+// decoding the movement frame fields and, later, a training dataset. Off unless the env var is set.
+const DUMP_FILE = process.env.WR_UDP_DUMP;
+function dumpPacket(msg) {
+  if (DUMP_FILE) require('fs').appendFileSync(DUMP_FILE, JSON.stringify({ t: Date.now(), s: msg.readUInt16BE(4), sub: msg[14], hex: msg.toString('hex') }) + '\n');
+}
+
 function handleTunnel(socket, msg, rinfo) {
+  dumpPacket(msg);
   logTunnelSample(msg);
   const via = `${socket.address().port}<-${rinfo.address}:${rinfo.port}`; // local server port <- peer's source address (compare with its handshake endpoint)
 
