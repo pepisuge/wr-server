@@ -707,14 +707,14 @@ function logFirst(name, payload) {
 function handlePlaceItem(room, player, payload, u) {
   if (room.state !== 2 || !player.alive) return null;
   logFirst('PlaceItemOnGround', payload);
-  const code = String(payload[27] || '').toUpperCase();
+  const code = String(payload[payload.length - 1] || '').toUpperCase(); // client 22: payload[22] (the reference reads [27]); the code is the last field either way
   if (!ownsCode(u, code) || (room.mode !== FFA_MODE && (player.itemsPlanted || 0) >= MAX_PLANTED)) return null;
   player.itemsPlanted = (player.itemsPlanted || 0) + 1;
   room.groundItems ??= new Map();
   room.groundNext = (room.groundNext || 0) + 1;
   const id = room.groundNext - 1;
   room.groundItems.set(id, { code, owner: player.slot });
-  const out = padded(payload, 28);
+  const out = [...payload];
   out[4] = id;
   return { payload: out };
 }
@@ -724,8 +724,8 @@ function handleUseItem(room, player, payload) {
   logFirst('UseItemOnGround', payload);
   const id = Number(payload[4]);
   if (!room.groundItems?.delete(id)) return null;
-  const out = padded(payload, 23);
-  switch (String(payload[22] || '').toUpperCase()) {
+  const out = padded(payload, 7);
+  switch (String(payload[payload.length - 1] || '').toUpperCase()) {
     case 'DS05': // flash mine, ammo box
     case 'DU01':
       break;
