@@ -589,6 +589,7 @@ function clearAutoRespawn(player) {
 
 function scheduleAutoRespawn(room, player) {
   clearAutoRespawn(player);
+  if (room.mode === EXPLOSIVE_MODE) return; // Explosive: the dead spectate until the next round starts, no mid-round respawn
   player.respawnTimer = setTimeout(() => {
     player.respawnTimer = null;
     // Re-checked here, not just at schedule time: by the time this fires,
