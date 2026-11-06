@@ -45,7 +45,7 @@ const { HANDLERS, SUB } = require('../game/gamesubs');
   out = HANDLERS[SUB.USE_ITEM](r, enemy, [0, 0, 0, 0, 0, 0, 0, ...Array(15).fill(0), 'DU02'], gu, noDb);
   assert.strictEqual(enemy.health, 700); assert.strictEqual(out.payload[6], 700);
   g.health = 700;
-  assert.strictEqual(HANDLERS[SUB.USE_ITEM](r, enemy, [0, 0, 0, 0, 0, 0, 0, ...Array(15).fill(0), 'DU02'], gu, noDb), null, 'already used');
+  assert.strictEqual(HANDLERS[SUB.USE_ITEM](r, enemy, [0, 0, 0, 0, 0, 0, 0, ...Array(15).fill(0), 'DU02'], gu, noDb).selfTarget, true, 'already used: answered to the sender only');
   const box = place('DV01') || (inv.set('DV01', { expireDate: 9e9 }), place('DV01')); assert.strictEqual(box.payload[4], 1, 'ids are stable, not list indices');
   HANDLERS[SUB.USE_ITEM](r, g, [0, 0, 0, 0, 1, 0, 0, ...Array(15).fill(0), 'DV01'], gu, noDb); assert.strictEqual(g.health, 1000);
   assert.strictEqual(HANDLERS[SUB.ARTILLERY](r, g, [0, 0, 0, 0], gu, noDb).payload[3], 1);

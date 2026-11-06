@@ -724,7 +724,10 @@ function handleUseItem(room, player, payload) {
   logFirst('UseItemOnGround', payload);
   const id = Number(payload[4]);
   const item = room.groundItems?.get(id);
-  if (!item) return null;
+  // The client sets a "waiting for the answer" flag when it sends a medic box / ammo box use (decompiled FUN_004b0bc0:
+  // DAT_00b71b7e / 7f) and ignores further boxes until a reply arrives, so even an unknown item gets an answer (to the
+  // sender only, nothing applied) or that client never uses a box again.
+  if (!item) return { payload: padded(payload, 7), selfTarget: true };
   const code = String(payload[payload.length - 1] || '').toUpperCase();
   // a land mine only hurts enemies: not its owner, and not teammates outside FFA (the item stays where it is)
   if (code === 'DU02' && (item.owner === player.slot || (room.mode !== FFA_MODE && item.team === player.team))) return null;
