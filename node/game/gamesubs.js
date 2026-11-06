@@ -715,6 +715,7 @@ function handlePlaceItem(room, player, payload, u) {
   const id = room.groundNext - 1;
   room.groundItems.set(id, { code, owner: player.slot, team: player.team });
   const out = [...payload];
+  out[3] = player.slot; // payload[3] = acting player's slot (decompiled FUN_00469a90 / FUN_004630d0); a client that does not set it correctly would be taken for another player
   out[4] = id;
   return { payload: out };
 }
@@ -733,6 +734,7 @@ function handleUseItem(room, player, payload) {
   if (code === 'DU02' && (item.owner === player.slot || (room.mode !== FFA_MODE && item.team === player.team))) return null;
   room.groundItems.delete(id);
   const out = padded(payload, 7);
+  out[3] = player.slot; // the receiving clients apply this packet to the player in payload[3] (found live: the health of slot 0 was overwritten)
   let others;
   switch (code) {
     case 'DS05': // flash mine, ammo box
