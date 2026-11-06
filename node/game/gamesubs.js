@@ -6,7 +6,8 @@ const { startRoundTimer, checkWinCondition, endRound, scoreboardValues } = requi
 const { getMap } = require('./maps');
 const { initExplosiveMatch } = require('./explosive');
 const { broadcastSystemMessage } = require('./chat');
-const { getItem, codeById } = require('./items');
+const { getItem, codeById, DEFAULT_ITEMS } = require('./items');
+const { ownsItem } = require('./inventory');
 const { record } = require('./record');
 
 const GAME_PACKET = 0x7530;
@@ -57,6 +58,9 @@ const SUB = {
   PLAYER_DEATH: 152,
   HEAL: 101,
   ENVIRONMENT_DAMAGE: 500,
+  ARTILLERY: 159,
+  PLACE_ITEM: 400,
+  USE_ITEM: 401,
   CONFIRM_DEATH: 154,
   BACK_TO_LOBBY: 9,
   AMMO_RECHARGE: 105,
@@ -141,6 +145,8 @@ function beginMatch(room, db) {
     p.inLobby = false;
   }
   room.spawnPoint = undefined;
+  room.groundItems = new Map();
+  for (const p of players) p.itemsPlanted = 0;
 
   // Ported from Room.Start()'s Flags/SpawnFlags setup (maps.js, backed by
   // the real map_data table). Doesn't pick which flag Spawn's index maps to
@@ -395,6 +401,7 @@ function handleSpawn(room, player, payload) {
   clearAutoRespawn(player); // the client made it here on its own, no need for the safety net
   player.health = 1000; // covers first spawn and every respawn after a death - Entities/Player.cs's Health=1000, not 100 (confirmed in both references, not Explosive-specific)
   player.alive = true;
+  player.itemsPlanted = 0;
   // Spawn.cs's GetByte(3): the class the client just spawned as (Engineer=0,
   // Medic=1, Sniper=2, Assault=3, Heavy=4). Only used for the room roster's
   // class field for now - a player who joins mid-match otherwise shows as
@@ -686,6 +693,65 @@ function handleEnvironmentDamage(room, player, payload, u, db) {
   return { newType: SUB.SUICIDE, payload: out };
 }
 
+// Ported from Handlers/Game/Ingame/PlaceItemOnGround.cs, UseItemsOnGround.cs and Artillery.cs. Positions are the
+// reference's (client 22 not captured yet: the first payload of each is logged so they can be checked). The reference
+// disconnects on a cheating attempt; here the request is just ignored. Ground items get a stable per-room id (the
+// reference uses list indices, which shift when one is removed).
+const MAX_PLANTED = 7; // per life, any mode but FFA
+const ownsCode = (u, code) => DEFAULT_ITEMS.has(code) || ownsItem(u.inventory, code);
+const loggedOnce = new Set();
+function logFirst(name, payload) {
+  if (!loggedOnce.has(name)) { loggedOnce.add(name); console.log(`[game] first ${name} payload=[${payload.join(', ')}]`); }
+}
+
+function handlePlaceItem(room, player, payload, u) {
+  if (room.state !== 2 || !player.alive) return null;
+  logFirst('PlaceItemOnGround', payload);
+  const code = String(payload[27] || '').toUpperCase();
+  if (!ownsCode(u, code) || (room.mode !== FFA_MODE && (player.itemsPlanted || 0) >= MAX_PLANTED)) return null;
+  player.itemsPlanted = (player.itemsPlanted || 0) + 1;
+  room.groundItems ??= new Map();
+  room.groundNext = (room.groundNext || 0) + 1;
+  const id = room.groundNext - 1;
+  room.groundItems.set(id, { code, owner: player.slot });
+  const out = padded(payload, 28);
+  out[4] = id;
+  return { payload: out };
+}
+
+function handleUseItem(room, player, payload) {
+  if (room.state !== 2 || !player.alive) return null;
+  logFirst('UseItemOnGround', payload);
+  const id = Number(payload[4]);
+  if (!room.groundItems?.delete(id)) return null;
+  const out = padded(payload, 23);
+  switch (String(payload[22] || '').toUpperCase()) {
+    case 'DS05': // flash mine, ammo box
+    case 'DU01':
+      break;
+    case 'DU02': // land mine
+      player.health = player.health >= 500 ? player.health - 300 : 200;
+      out[6] = player.health;
+      break;
+    case 'DV01': // medic box
+      player.health = Math.min(1000, player.health + 400);
+      out[6] = player.health;
+      break;
+    default:
+      return null;
+  }
+  return { payload: out };
+}
+
+function handleArtillery(room, player, payload, u) {
+  if (room.state !== 2 || !player.alive) return null;
+  logFirst('Artillery', payload);
+  if (!ownsCode(u, 'DX01')) return null;
+  const out = padded(payload, 4);
+  out[3] = 1;
+  return { payload: out };
+}
+
 // Ported from Handlers/Game/Ingame/Heal.cs. payload[2] target slot, [3] 1 = healing tower. Amount by the healer's
 // weapon: medic kits 300/450/600, HP kit 200, adrenaline tops up to 400 (else +100), tower 400. Same team only; the
 // reference's assist counter is not tracked here. Items are matched by code (their numeric ids differ between patches).
@@ -788,6 +854,9 @@ const HANDLERS = {
   [SUB.AMMO_RECHARGE]: handleAmmoRecharge,
   [SUB.SUICIDE]: handleSuicide,
   [SUB.HEAL]: handleHeal,
+  [SUB.PLACE_ITEM]: handlePlaceItem,
+  [SUB.USE_ITEM]: handleUseItem,
+  [SUB.ARTILLERY]: handleArtillery,
   [SUB.ENVIRONMENT_DAMAGE]: handleEnvironmentDamage,
   [SUB.ROUND_END_CONFIRM]: handleRoundEndConfirm,
 };
