@@ -33,7 +33,7 @@ const ERROR = {
   INVENTORY_FULL: 97070,
 };
 
-const DAYS = [3, 7, 15, 30]; // item_shop.cost is indexed by this, index 4 = "permanent"
+const DAYS = [3, 7, 15, 30, 3650]; // item_shop.cost is indexed by this; index 4 = "permanent" (the client sends it, e.g. DA05) = 10 years
 
 function sendError(socket, code) {
   socket.sendPacket(ITEMSHOP, [code]);
@@ -150,7 +150,7 @@ function handleItemshop(db) {
     const lengthIdx = Number(pkt.blocks[4]);
     const item = getItem(itemCode);
 
-    if (itemCode.length !== 4 || !item || !(lengthIdx >= 0 && lengthIdx < 4)) {
+    if (itemCode.length !== 4 || !item || !(lengthIdx >= 0 && lengthIdx < DAYS.length)) {
       return socket.end(); // reference treats a malformed/unknown request here as likely cheating
     }
     if (!item.buyable) return sendError(socket, ERROR.CANNOT_BE_BOUGHT);
