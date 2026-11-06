@@ -203,3 +203,14 @@ Da verificare col client 22: opcode clan del nostro Node (`0x6710`, `0x6760`) no
 - Rimane solo `CLAN_QUICK_JOIN = 0x7360` (anche in SGMartin/Paquetes.txt = 29536; nessuno dei due riferimenti C# lo implementa). Client -> server: `FUN_00469430` manda `[stringa]` (<100 caratteri, "NULL" se vuota; probabilmente la password della stanza) ed e' usato al posto del join normale (`FUN_0046ad40`: `[1, idStanza, stringa]`) quando `*(DAT_00bfc1e8+0x4cea8)` e' tra 0x41 e 0x46 (65-70 = 'A'..'F': significato non determinato; coincide per numero con i 6 ServerTypes 0..5 + 65, ma non verificato). Server -> client: `FUN_005ee230` e' SOLO un gestore di errori: 94110 (calcolo risultati), 94100 (caricamento dati), 94060 (utenti superati), 94030 (password errata), 93090, 93030, altrimenti messaggio generico; sono i codici di `RoomJoinErrors`. Il caso di successo non passa da 0x7360: presumibilmente il server risponde come per un join di stanza (0x7310).
 - Conseguenze: la clan war richiede capire cosa imposta quel valore 65-70 (campo del pacchetto di cambio canale/lista server?) e un handler 0x7360 -> join di stanza. Non implementato.
 **Coupon verificato (2026-11-06):** con `0x7910` il coupon funziona sia col fake-client (MEOW -> `[0,0,saldo]`, ripetuto -> `-1`, inesistente -> `-2`) sia dall'interfaccia reale del client 22 (confermato dall'utente).
+
+## P. Inventario delle implementazioni mancanti (2026-11-06)
+Confronto sottocomandi di gioco (0x7530) riferimento vs Node (`game/gamesubs.js`): il riferimento ne ha 36, Node ne gestisce 20. **Mancano**:
+- Cure/riparazioni: `101 Heal`, `102 Repair` (Heal.cs/VehicleRepair.cs: ID oggetto PF-23 nel client 22: medikit 77/78/79, adrenalina 82, hpKit 85, chiavi 80/81).
+- Danni oggetti/ambiente: `104 ObjectDamage`, `153 ObjectDestroy`, `500 EnviromentDamage` (caduta/acqua).
+- Veicoli: `200 EnterVehicle`, `201 ChangeVehicleSeat`, `202 LeaveVehicle` (+ `Entities/Vehicle.cs`, 177 righe; `0x`-pacchetto `LeaveVehicle`/`VehicleRepair`).
+- Conquest: `156 FlagCapture` + `Modes/Conquest.cs` (191 righe); in Node solo mappe/indici (`maps.js`), nessun gameplay di bandiere.
+- Oggetti a terra: `400 PlaceItemOnGround`, `401 UseItemOnGround` (kit, mine...), `159 Artillery`, `61 Votekick`.
+- Pacchetti non-subcomando: `RoomQuickJoin 0x7320`, `RoomSpectate 0x7330`, `SpectatorInfo 0x7501`, `MapData 0x7510`, `Markt 0x7700`, `UpdateInventory 0x7900`, `CMDFindPlayer 0x6011`, `CLAN_QUICK_JOIN 0x7360` (il client 22 li registra, Node no).
+Definiti ma senza handler: `4 StartReply`, `152 PlayerDeath`, `403 StartMission` (sono risposte/uscite, non richieste).
+Prima di implementare ognuno va verificato che il client 22 usi lo stesso numero (come per il coupon: 0x8100 era sbagliato) leggendo le sue funzioni di invio.
