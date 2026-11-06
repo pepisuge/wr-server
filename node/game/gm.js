@@ -7,7 +7,7 @@
 // to grant GM powers safely.
 const { users, getChannel } = require('./state');
 const { xpForLevel, levelForXp } = require('./progression');
-const { removeFromRoom, notifyLobbyAfterLeave, sendRoomUpdateToLobby, ROOM_LEAVE, ROOM_KICK } = require('./rooms');
+const { handleRoomSpectate, removeFromRoom, notifyLobbyAfterLeave, sendRoomUpdateToLobby, ROOM_LEAVE, ROOM_KICK } = require('./rooms');
 const { endRound } = require('./roundtimer');
 const { getMap, listMaps } = require('./maps');
 const { grantItem } = require('./shop');
@@ -379,6 +379,12 @@ function cmdUserInfo(socket, db, args) {
   );
 }
 
+// The client 22 room list shows no spectate control we could trigger, so this sends the same 0x7330 request by hand.
+function cmdSpectate(socket, db, args) {
+  if (socket.user.roomId !== null) return reply(socket, 'Esci prima dalla stanza.');
+  handleRoomSpectate(socket, { blocks: [1, args[0]] });
+}
+
 function cmdRoomInfo(socket, db, args) {
   const u = socket.user;
   const roomId = Number(args[0]);
@@ -566,6 +572,7 @@ const HELP_COMMANDS = [
   '/giveroom <codice> <giorni>',
   '/userinfo <giocatore>',
   '/roominfo <id>',
+  '/spectate <id stanza>',
   '/closeroom <id>',
   '/maps',
   '/map <id>',
@@ -597,6 +604,7 @@ const COMMANDS = {
   giveroom: cmdGiveRoom,
   userinfo: cmdUserInfo,
   roominfo: cmdRoomInfo,
+  spectate: cmdSpectate,
   closeroom: cmdForceCloseRoom,
   maps: cmdMaps,
   map: cmdChangeMap,
