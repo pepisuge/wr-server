@@ -1,6 +1,6 @@
 const { broadcastPacket } = require('../lib/xor-socket');
 const { XOR } = require('../lib/constants');
-const { getChannel, lobbyUsersIn, nextFreeRoomId, users } = require('./state');
+const { getChannel, lobbyUsersIn, nextFreeRoomId, users, roomSockets } = require('./state');
 const { stopRoundTimer, endRound } = require('./roundtimer');
 const { levelForXp, suitableLevel, applyMatchEnd } = require('./progression');
 const { clanInfo } = require('./clan');
@@ -8,6 +8,9 @@ const { clanInfo } = require('./clan');
 const ROOM_CREATION = 0x7300;
 const ROOM_JOIN = 0x7310;
 const ROOM_QUICK_JOIN = 0x7320;
+const ROOM_SPECTATE = 0x7330;
+const SPECTATOR_INFO = 0x7501;
+const MAX_SPECTATORS = 5;
 const ROOM_LEAVE = 0x7340;
 const ROOM_KICK = 0x7341;
 const ROOM_INVITE = 0x7350;
@@ -292,6 +295,44 @@ function handleRoomQuickJoin(socket) {
   handleRoomJoin(socket, { blocks: [fits[Math.floor(Math.random() * fits.length)].id, ''] });
 }
 
+// Ported from Handlers/RoomSpectate.cs + Room.AddSpectator + Packets/RoomSpectate(s).cs, GM accounts only (not in the
+// reference). Client 22 sends [byte, roomId, password|NULL]. A spectator is not a player: it sits in room.spectators
+// (sessionId -> spectator id 0..4, shown to the client as 32+id) and receives the room's broadcasts via roomSockets().
+// The info packet has two shapes in the reference: the long one (with endpoints, here 0) announces, the short one removes.
+function spectatorInfo(room, sid, specId, removed) {
+  const u = users.get(sid);
+  return removed ? [1, 0, specId, u.id, sid, u.displayname, 999] : [1, 0, specId, u.id, sid, u.displayname, '0', 999, 0, 0, 0, 0, 0];
+}
+
+function handleRoomSpectate(socket, pkt) {
+  const u = socket.user;
+  if (!u || u.roomId !== null) return;
+  const room = getChannel(u.channel).rooms.get(Number(pkt.blocks[1]));
+  if (!u.isGm || !room) return socket.sendPacket(ROOM_SPECTATE, [94010]);
+  room.spectators ??= new Map();
+  const specId = [0, 1, 2, 3, 4].find((i) => ![...room.spectators.values()].includes(i));
+  if (specId === undefined || room.spectators.size >= MAX_SPECTATORS) return socket.sendPacket(ROOM_SPECTATE, [94070]);
+
+  room.spectators.set(u.sessionId, specId);
+  u.roomId = room.id;
+  socket.sendPacket(ROOM_SPECTATE, [1, 1, 32 + specId, ...roomInfoFields(room)]);
+  sendRoomPlayers([socket], [...room.players.values()]);
+  socket.sendPacket(SPECTATOR_INFO, [...room.spectators].flatMap(([sid, i]) => spectatorInfo(room, sid, i)));
+  const playerSockets = [...room.players.keys()].map((sid) => users.get(sid)?.socket).filter(Boolean);
+  broadcastPacket(playerSockets, XOR.external, SPECTATOR_INFO, spectatorInfo(room, u.sessionId, specId));
+}
+
+// Room.RemoveSpectator: tell the room, then give the spectator its lobby back.
+function removeSpectator(room, u) {
+  const specId = room.spectators.get(u.sessionId);
+  broadcastPacket(roomSockets(room), XOR.external, SPECTATOR_INFO, spectatorInfo(room, u.sessionId, specId, true));
+  room.spectators.delete(u.sessionId);
+  u.roomId = null;
+  if (u.socket.destroyed) return; // dropped connection
+  u.socket.sendPacket(ROOM_SPECTATE, [0]);
+  sendRoomList(u.socket, u.roomListPage || 0);
+}
+
 // Ported from Game/Handlers/RoomJoin.cs + Room.Add. Skips level-limit gating.
 function handleRoomJoin(socket, pkt) {
   const u = socket.user;
@@ -375,7 +416,7 @@ function handleRoomJoin(socket, pkt) {
 
   // Tell the players already there about the newcomer, before adding them
   // to the room (matches Room.Add: broadcasts first, then registers).
-  const existingSockets = [...room.players.keys()].map((sid) => users.get(sid)?.socket).filter(Boolean);
+  const existingSockets = roomSockets(room);
   sendRoomPlayers(existingSockets, [newPlayer]);
 
   room.players.set(u.sessionId, newPlayer);
@@ -442,6 +483,11 @@ function removeFromRoom(db, u) {
     return null;
   }
 
+  if (room.spectators?.has(u.sessionId)) {
+    removeSpectator(room, u);
+    return room;
+  }
+
   const player = room.players.get(u.sessionId);
   if (room.state === 2 && player) {
     const { levelUp } = applyMatchEnd(db, u, player.kills);
@@ -455,6 +501,7 @@ function removeFromRoom(db, u) {
   u.roomId = null;
 
   if (room.players.size === 0) {
+    for (const sid of [...(room.spectators?.keys() ?? [])]) removeSpectator(room, users.get(sid));
     stopRoundTimer(room);
     chan.rooms.delete(room.id);
   } else {
@@ -471,7 +518,7 @@ function removeFromRoom(db, u) {
   // for anyone whose room-mate crashed instead of leaving normally.
   if (room.players.size > 0) {
     const fields = [1, u.sessionId, oldSlot, room.players.size, room.master, u.xp, u.money];
-    const sockets = [...room.players.keys()].map((sid) => users.get(sid)?.socket).filter(Boolean);
+    const sockets = roomSockets(room);
     broadcastPacket(sockets, XOR.external, ROOM_LEAVE, fields);
   }
 
@@ -506,6 +553,8 @@ function handleRoomLeave(socket, db) {
 
   const chan = getChannel(u.channel);
   const oldSlot = chan.rooms.get(u.roomId)?.players.get(u.sessionId)?.slot ?? 0;
+
+  if (chan.rooms.get(u.roomId)?.spectators?.has(u.sessionId)) return removeFromRoom(db, u); // removeSpectator already answered
 
   const room = removeFromRoom(db, u);
   const fields = [1, u.sessionId, oldSlot, room ? room.players.size : 0, room ? room.master : 0, u.xp, u.money];
@@ -665,6 +714,7 @@ module.exports = {
   handleRoomCreation,
   handleRoomJoin,
   handleRoomQuickJoin,
+  handleRoomSpectate,
   handleRoomLeave,
   handleRoomListRequest,
   handleRoomKick,
@@ -679,6 +729,7 @@ module.exports = {
   ROOM_CREATION,
   ROOM_JOIN,
   ROOM_QUICK_JOIN,
+  ROOM_SPECTATE,
   ROOM_LEAVE,
   ROOM_KICK,
   ROOM_INVITE,

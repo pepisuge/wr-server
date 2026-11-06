@@ -1,6 +1,6 @@
 const { broadcastPacket } = require('../lib/xor-socket');
 const { XOR } = require('../lib/constants');
-const { getChannel, lobbyUsersIn, users } = require('./state');
+const { getChannel, lobbyUsersIn, users, roomSockets } = require('./state');
 const { handleGmCommand } = require('./gm');
 
 const CHAT = 0x7400;
@@ -75,7 +75,7 @@ function handleChat(socket, pkt, db) {
       if (u.roomId === null) return socket.end();
       const room = getChannel(u.channel).rooms.get(u.roomId);
       if (!room) return;
-      const sockets = [...room.players.keys()].map((sid) => users.get(sid)?.socket).filter(Boolean);
+      const sockets = roomSockets(room);
       broadcast(sockets, fields);
       break;
     }
@@ -110,7 +110,7 @@ function handleChat(socket, pkt, db) {
 // popup spamming every tick). Kept the "System>> " prefix since it doesn't
 // hurt and matches the same "name>> text" shape every other message uses.
 function broadcastSystemMessage(room, text) {
-  const sockets = [...room.players.keys()].map((sid) => users.get(sid)?.socket).filter(Boolean);
+  const sockets = roomSockets(room);
   broadcast(sockets, [1, 0, 'System', TYPE.ROOM_TO_ALL, 999, 'NULL', `System>> ${text}`]);
 }
 

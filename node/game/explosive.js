@@ -8,7 +8,7 @@
 // numbers (Fase 9) were, and corrected once real capture shows what's wrong.
 const { broadcastPacket } = require('../lib/xor-socket');
 const { XOR } = require('../lib/constants');
-const { getChannel, users } = require('./state');
+const { getChannel, roomSockets } = require('./state');
 const { GameConfig } = require('./progression');
 
 const GAME_PACKET = 0x7530;
@@ -24,9 +24,6 @@ function countAlive(room, team) {
   return [...room.players.values()].filter((p) => p.team === team && p.alive).length;
 }
 
-function roomSockets(room) {
-  return [...room.players.keys()].map((sid) => users.get(sid)?.socket).filter(Boolean);
-}
 
 // Ported from Explosive's constructor + Initilize(). Called once from
 // gamesubs.js's handleStart when room.mode is Explosive, right after the

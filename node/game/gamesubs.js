@@ -1,6 +1,6 @@
 const { broadcastPacket } = require('../lib/xor-socket');
 const { XOR } = require('../lib/constants');
-const { getChannel, users } = require('./state');
+const { getChannel, users, roomSockets } = require('./state');
 const { sendRoomUpdateToLobby, findFreeSlot } = require('./rooms');
 const { startRoundTimer, checkWinCondition, endRound, scoreboardValues } = require('./roundtimer');
 const { getMap } = require('./maps');
@@ -219,7 +219,7 @@ function tryAutoStart(room) {
   // Broadcasts GAME_COUNTDOWN alongside the chat line each tick - see the
   // opcode's own comment above for why (unproven experiment, not a port).
   const sendCountdownPacket = (seconds) => {
-    const sockets = [...room.players.keys()].map((sid) => users.get(sid)?.socket).filter(Boolean);
+    const sockets = roomSockets(room);
     broadcastPacket(sockets, XOR.external, GAME_COUNTDOWN, [seconds]);
   };
 
@@ -616,7 +616,7 @@ function scheduleAutoRespawn(room, player) {
     payload[8] = slot;
     payload[9] = slot;
 
-    const sockets = [...room.players.keys()].map((sid) => users.get(sid)?.socket).filter(Boolean);
+    const sockets = roomSockets(room);
     broadcastPacket(sockets, XOR.external, GAME_PACKET, [1, player.slot, room.id, 2, SUB.SPAWN, ...payload]);
   }, AUTO_RESPAWN_MS);
 }
@@ -833,7 +833,7 @@ function handleGamePacket(socket, pkt, db) {
   const fields = [1, originalSlot, room.id, unknown, result.newType ?? subType, ...(result.payload ?? payload)];
   const sockets = result.selfTarget
     ? [socket]
-    : [...room.players.keys()].map((sid) => users.get(sid)?.socket).filter(Boolean);
+    : roomSockets(room);
   broadcastPacket(sockets, XOR.external, GAME_PACKET, fields);
 
   if (result.updateLobby) sendRoomUpdateToLobby(room, true);

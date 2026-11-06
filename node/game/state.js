@@ -28,8 +28,14 @@ function lobbyUsersIn(channelType, excludeSessionId) {
   );
 }
 
+// Sockets of everyone who receives a room's broadcasts: players plus spectators (room.spectators: sessionId -> spectator id).
+function roomSockets(room) {
+  return [...room.players.keys(), ...(room.spectators?.keys() ?? [])].map((sid) => users.get(sid)?.socket).filter(Boolean);
+}
+
 module.exports = {
   users,
+  roomSockets,
   channels,
   getChannel: (type) => getChannel(channels, type),
   lobbyUsersIn,

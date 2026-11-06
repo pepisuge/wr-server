@@ -1,6 +1,6 @@
 const { broadcastPacket } = require('../lib/xor-socket');
 const { XOR } = require('../lib/constants');
-const { users } = require('./state');
+const { users, roomSockets } = require('./state');
 const { applyMatchEnd } = require('./progression');
 const { tickExplosive } = require('./explosive');
 
@@ -47,7 +47,7 @@ function startRoundTimer(room, db) {
   room.upTick = 0;
   room.downTick = 3600000; // 1 hour, matches FreeForAll.Initilize's Room.DownTick - Explosive's own initExplosiveMatch overwrites this right after, per round
   room.tickInterval = setInterval(() => {
-    const sockets = [...room.players.keys()].map((sid) => users.get(sid)?.socket).filter(Boolean);
+    const sockets = roomSockets(room);
     if (!sockets.length) {
       stopRoundTimer(room);
       return;
