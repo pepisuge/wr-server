@@ -11,7 +11,7 @@ const NOTICE = 1; // Game/Enums/ChatType.cs Notice1 - see gm.js for why this is 
 const INTERVAL_MS = 5000;
 // Non invasivo: 4 ping mancati (20s) prima di considerare la connessione
 // morta - assorbe un lag/freeze temporaneo del client senza scollegarlo.
-const PONG_TIMEOUT_MS = INTERVAL_MS * 4;
+const PONG_TIMEOUT_MS = Number(process.env.WR_PONG_TIMEOUT_MS) || INTERVAL_MS * 4; // WR_PONG_TIMEOUT_MS: raise while a debugger freezes the client
 
 function premiumTimeLeft(u) {
   if (!u.premium || !u.premiumExpireDate) return -1;
