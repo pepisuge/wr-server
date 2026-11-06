@@ -3,6 +3,7 @@
 // ("network byte order") integers - Node's Buffer already reads/writes those
 // natively, no manual byte-reversal needed like the C# does.
 const { users, getChannel } = require('./state');
+const { recordFrame } = require('./record');
 
 const INITIAL = 0x1001;
 const PING = 0x1010; // also the envelope for the "tunnel" (relay) sub-packets below
@@ -121,6 +122,7 @@ function dumpPacket(msg) {
 
 function handleTunnel(socket, msg, rinfo) {
   dumpPacket(msg);
+  if (msg[14] === 0x31) recordFrame(msg);
   logTunnelSample(msg);
   const via = `${socket.address().port}<-${rinfo.address}:${rinfo.port}`; // local server port <- peer's source address (compare with its handshake endpoint)
 

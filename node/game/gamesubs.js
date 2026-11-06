@@ -7,6 +7,7 @@ const { getMap } = require('./maps');
 const { initExplosiveMatch } = require('./explosive');
 const { broadcastSystemMessage } = require('./chat');
 const { getItem } = require('./items');
+const { record } = require('./record');
 
 const GAME_PACKET = 0x7530;
 const SCOREBOARD = 0x7550;
@@ -397,6 +398,7 @@ function handleSpawn(room, player, payload) {
   // class field for now - a player who joins mid-match otherwise shows as
   // Engineer to everyone until they spawn once.
   player.class = Number(payload[3]) || 0;
+  record({ e: 'spawn', slot: player.slot });
   const out = padded(payload, 10);
   const slot = nextSpawnSlot(room);
   applySpawnTestOverrides(room, player, out);
@@ -481,6 +483,7 @@ function handlePlayerDamage(room, player, payload, u, db) {
 
   const previousHealth = victim.health;
   victim.health = Math.max(0, victim.health - damage);
+  record({ e: 'hit', from: player.slot, to: victim.slot, bone: hsCalc, weapon, dmg: damage, hs: headshot, hp: victim.health });
 
   const out = [...payload];
   out[12] = victim.health;
