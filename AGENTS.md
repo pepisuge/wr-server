@@ -8,7 +8,7 @@ Private WarRock server in plain Node.js (CommonJS). Entry points: `node/auth-ser
 - `node/lib/`: packet framing/XOR, DB pool, constants. `node/auth/`: login handlers.
 - `node/game/`: one module per area (`rooms`, `chat`, `clan`, `shop`, `inventory`, `items`, `progression`, `gm`, `coupon`, `gamesubs`, `udp-handlers`...).
 - `sql/`: DB patches applied on top of the upstream schema. `WarRock-Chapter-1-Server/`: upstream C# reference (submodule, read-only).
-- `Protocollo WarRock.md`: living protocol guide (Italian). Update it with every protocol-level change.
+- `docs/protocol/`: protocol reference (GitHub Pages site). Update the matching page with every protocol-level change.
 
 ## Rules
 - Smallest diff that works; delete before adding; no speculative abstractions; no new dependencies without a reason.

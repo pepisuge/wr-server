@@ -1,0 +1,46 @@
+---
+layout: page
+title: Clans
+permalink: /protocol/clans
+---
+
+`CLAN_SYSTEM` = `0x6710` = **26384**, envelope `[subtype, ...payload]`. Ported from ToXiiC Core (`Game/Clan.cs`, `CP_Clan`); Chapter-1-Server only has read-only clan code.
+
+| subtype | name | notes |
+|---|---|---|
+| 0 | `CHECK_NAME` | is the name free? (`62003` = exists) |
+| 1 | `CREATE` | **name only**, costs 10000 dinars |
+| 2 | `APPLY` | application (pending), not an instant join |
+| 3 | `LEAVE` | the master leaving disbands the clan silently (as in the reference) |
+| 4 | `MY_CLAN` | own clan panel, read-only |
+| 5 | `MEMBERS` | roster + applicants |
+| 6 | `SEARCH` | search by name |
+| 7 | `INFO` | |
+| 8 | `ChangeAnnDec` | not handled (needs item `CB02`/`CB54`) |
+| 9 | `JOIN_ACTION` | accept/reject an applicant (+ membership check) |
+| 10 | `RANK_ACTION` | rank change, kick (+ membership check) |
+| 11 | `PROMOTE` | hand over master (+ master-only check, missing in the reference) |
+| 12 | `NickChange` | not handled |
+| 14 | `MarkChange` | not handled |
+| 16 | `DISBAND` | |
+| 17 | `NewSearchClan` | not handled |
+| 1000 | `START_WAR` | **self-designed**, deliberately outside the real 0-17 range |
+
+Ranks (`clanrank`): `0` member, `1` officer, `2` master, `9` pending applicant.
+
+`CLAN_RANKING` = `0x6760` = 26464 is a separate opcode. Clan chat is chat type `10`; forwarding to online members is our own logic (the reference only logs it).
+
+## Deviations from the reference
+
+- Clan ids use the table's `AUTO_INCREMENT`.
+- `exp` is derived (`wins x 250`); `iconid` (`1001001`) and `maxusers` (20) are fixed, as ToXiiC's defaults at creation; member join date is approximated with the clan creation date.
+- Display names come from the login DB with one batched `WHERE id IN (?)` query.
+- Online membership is always derived live from connected users with the same `clanId`.
+
+## Clan war (self-designed)
+
+`isClanWar`/`Clan1`/`Clan2` exist in the room packets (`-1` = no), but neither reference shows how a real client starts a war. Here a master declares war on another clan by id (`START_WAR = 1000`): the server creates a room with `isClanWar=1` and assigns teams by clan (challenger team 0, challenged team 1); the other clan gets a chat notice. Manual team changes are ignored. War results (`wins`/`losses`/`draws`, `exp`) are not persisted yet.
+
+## Status
+
+The full cycle (create, apply, accept, rank, promote, disband, search, ranking) is verified with a scripted client; the real client UI is not verified yet (icon/description fields may need a different format). Clan emblems are tracked as a separate feature.

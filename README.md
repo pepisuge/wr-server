@@ -15,7 +15,7 @@ node auth-server.js
 node game-server.js
 ```
 Or `docker compose up -d` (copy `.env.example` to `.env` first; run `git submodule update --init` beforehand).
-Protocol notes and design history: [`Protocollo WarRock.md`](Protocollo%20WarRock.md) (Italian).
+Protocol reference: [`docs/protocol`](docs/protocol/index.md), also published at <https://pepisuge.github.io/wr-server/>.
 
 ## Contributing
 Humans and AI agents are welcome: read [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md). Use the issue templates for bugs and ideas.
