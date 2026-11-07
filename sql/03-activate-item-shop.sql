@@ -2,8 +2,8 @@
 -- (real power/equip-slot data in item_weapons/item_target_info/item_equipment,
 -- or already read by inventory.js for CA02/CA03) but were never made buyable.
 -- Prices are invented (no client-shipped price survived for these), scaled
--- against the closest comparable item already on sale. See Protocollo
--- WarRock.md, item shop section, for the items.bin cross-check that produced
+-- against the closest comparable item already on sale. See docs/protocol/economy.md
+-- (shop section) for the items.bin cross-check that produced
 -- this list and the ones deliberately left out (weapon attachments with no
 -- equip path yet: DW01/DW02/DW03/DW04; unimplemented features: CC03/CC04
 -- EXP/Dinar boosters). CB01/CB02 were also excluded here at first (thought

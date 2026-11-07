@@ -2,7 +2,7 @@
 -- at first (same trap as the GM commands, CLAUDE.md) - Chapter-1-Server never
 -- wires them, but ToXiiC-Core's CashItemBuy.cs (CB01, OnItemUse) and Clan.cs
 -- (CB02, NickChange subtype) do, cabled to real DB mutations. Ported in
--- node/game/shop.js and node/game/clan.js. See Protocollo WarRock.md.
+-- node/game/shop.js and node/game/clan.js. See docs/protocol/economy.md.
 
 UPDATE item_extra SET active = 1 WHERE code = 'CB01'; -- item_shop.buyable was already 1 here, cost '9800' unchanged
 

@@ -1,5 +1,5 @@
 -- CC03 (UP_EXP) / CC04 (UP_DINAR): confirmed dead in both C# references (no
--- code applies the multiplier anywhere - see Protocollo WarRock.md 9.3bis).
+-- code applies the multiplier anywhere - see docs/protocol/economy.md).
 -- Self-designed from here on, not a port: node/game/progression.js now
 -- applies a +30% XP/Dinar rate at match-end while the item is owned, reusing
 -- ToXiiC-Core's own unused gameserver.xml EXPBonus/DinarBonus=0.3 values.

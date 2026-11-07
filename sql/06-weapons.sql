@@ -1,5 +1,5 @@
 -- Weapons that are real (active in item_weapons, real item_target_info
--- power) but were never priced in item_shop. See Protocollo WarRock.md
+-- power) but were never priced in item_shop. See docs/protocol/economy.md
 -- for the reasoning behind each one.
 
 -- D001 (Barrel, power 650) sits in the 8th weapon slot (item_equipment's
