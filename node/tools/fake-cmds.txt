@@ -1,4 +1,0 @@
-join 0
-sleep 800
-ready
-autospawn

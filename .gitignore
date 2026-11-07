@@ -18,4 +18,8 @@ tools/patch-server/wr/*.zip
 datasets/
 udp-dump.jsonl
 bot-cmds*.txt
-tools/client22/items-variants/*.bin
+
+fake-client*
+bot-*.txt
+*.bin
+*.exe
