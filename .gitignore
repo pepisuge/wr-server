@@ -23,3 +23,9 @@ fake-client*
 bot-*.txt
 *.bin
 *.exe
+
+# graphify: commit graph.json / GRAPH_REPORT.md / graph.html, not the machine-local state
+graphify-out/cache/
+graphify-out/manifest.json
+graphify-out/.graphify_root
+.claude/settings.local.json

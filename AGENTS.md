@@ -22,3 +22,12 @@ Private WarRock server in plain Node.js (CommonJS). Entry points: `node/auth-ser
 MariaDB on 127.0.0.1:3306 with `masterserver` and `wres2` (upstream dumps + `sql/03`…`08`), then `cd node && node auth-server.js` and `node game-server.js`.
 Or Docker: see `docker/` and the README. The upstream dumps `DROP` existing tables: never load them into a DB you care about.
 A real client needs `login.warrock.net` pointing at the server (hosts file).
+
+## Code graph (graphify)
+`graphify-out/` holds a code graph built with [graphify](https://github.com/safishamsi/graphify) (`pip install graphifyy`):
+local tree-sitter parse, no LLM, nothing leaves your machine.
+- If `graphify` is installed, start codebase questions with `graphify query "<question>"`, `graphify explain "<symbol>"`
+  or `graphify path "<A>" "<B>"`, then read only the lines they point to. `graphify-out/GRAPH_REPORT.md` is the overview (hubs, communities).
+- After changing code, run `graphify update .` and commit `graphify-out/` with your change. A large `graph.json` diff is expected.
+- The graph is a map, not the truth: check the file before relying on an edge marked INFERRED.
+- Optional local hooks for Claude Code / Codex: `graphify claude install` / `graphify codex install` (keep them out of commits).
