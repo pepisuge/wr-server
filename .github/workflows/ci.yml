@@ -16,3 +16,21 @@ jobs:
       - name: Forbidden files
         run: |
           if git ls-files | grep -Ei '\.(exe|dll|rar|zip|7z|dds|tga|bin)$|items\.bin|weapondata'; then exit 1; fi
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Start the stack
+        run: |
+          cp docker/.env.example docker/.env
+          docker compose -f docker/docker-compose.yml up -d --build --wait --wait-timeout 300
+      - name: Schema check
+        run: |
+          docker compose -f docker/docker-compose.yml exec -T db mariadb -uroot -pchangeme wres2 \
+            -e "SELECT is_gm, mutedexpire FROM user_details LIMIT 1; SELECT COUNT(*) FROM user_coupons; SELECT COUNT(*) FROM masterserver.users;"
+      - name: Logs
+        if: always()
+        run: docker compose -f docker/docker-compose.yml logs

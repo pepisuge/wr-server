@@ -14,7 +14,11 @@ cd node && npm install
 node auth-server.js
 node game-server.js
 ```
-Or `docker compose up -d` (copy `.env.example` to `.env` first; run `git submodule update --init` beforehand).
+Without Docker: load `WarRock-Chapter-1-Server/Databases/*.SQL` (`git submodule update --init`), then `sql/03`…`08` into `wres2`, in order.
+**Warning:** the upstream dumps contain `USE` + `DROP TABLE`, so they wipe an existing `masterserver`/`wres2`; back up first.
+
+With Docker (from the repo root, after `git submodule update --init` and `cp docker/.env.example docker/.env`):
+`docker compose -f docker/docker-compose.yml up -d --build`. Set `SERVER_IP` in `docker/.env` for LAN clients.
 Protocol reference: [`docs/protocol`](docs/protocol/index.md), also published at <https://pepisuge.github.io/wr-server/>.
 
 ## Contributing
