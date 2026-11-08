@@ -11,7 +11,7 @@ const { handleItemshop, ITEMSHOP } = require('./shop');
 const { loadUserInventory, loadUserEquipment, buildItemlist, buildSlotState } = require('./inventory');
 const { loadRedeemedCoupons, handleCoupon, COUPON } = require('./coupon');
 const { handlePingReply, PING } = require('./ping');
-const { findSession } = require('./internal-client');
+const { takeSession } = require('./internal-client');
 
 const SERVER_TIME = 0x6100;
 const AUTHORIZATION = 0x6200;
@@ -79,13 +79,13 @@ function createHandlers(db) {
 
   // Ported from Game/Handlers/Authorization.cs + Game/Packets/Authorization.cs.
   // Every field here is client-controlled: the session must have been announced by Auth at login
-  // (PLAYER_AUTHORIZATION, see internal-client.js) for this userId/username.
+  // (PLAYER_AUTHORIZATION, see internal-client.js) for this userId/username, and is single-use.
   // Displayname comes from Auth too. blocks[7] (AccessLevel) is ignored: GM rights come from user_details.is_gm.
   async function handleAuthorization(socket, pkt) {
     const userId = Number(pkt.blocks[0]);
     const username = pkt.blocks[2] || '';
     const sessionId = Number(pkt.blocks[4]);
-    const session = userId > 0 && sessionId > 0 ? findSession(sessionId, userId, username) : null;
+    const session = userId > 0 && sessionId > 0 ? takeSession(sessionId, userId, username) : null;
     const displayname = session?.displayname;
 
     if (!session) {
