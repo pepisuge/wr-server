@@ -16,6 +16,40 @@ for (const msg of [Buffer.alloc(0), Buffer.from([1]), Buffer.alloc(15, 0x10), Bu
   assert.doesNotThrow(() => handleUdpPacket(udp, msg, { address: '1.2.3.4', port: 1 }, 5350));
 }
 
+// UDP relay: a handshake must come from the player's TCP IP, frames from its handshake endpoint
+{
+  const { users: u2, getChannel } = require('../game/state');
+  const sent = [];
+  const sock = { send: (m, port, address) => sent.push(`${address}:${port}`), address: () => ({ port: 5350 }) };
+  const mkUser = (sid, ip) => ({ sessionId: sid, channel: 1, roomId: 7, socket: { remoteAddress: `::ffff:${ip}` } });
+  const a = mkUser(201, '10.0.0.1');
+  const b = mkUser(202, '10.0.0.2');
+  u2.set(201, a).set(202, b);
+  getChannel(1).rooms.set(7, { state: 2, players: new Map() });
+  const handshake = (sid) => { const m = Buffer.alloc(65); m.writeUInt16BE(0x1010, 0); m.writeUInt16BE(sid, 4); m[14] = 0x21; return m; };
+  const frame = (sid, target) => { const m = Buffer.alloc(126); m.writeUInt16BE(0x1010, 0); m.writeUInt16BE(sid, 4); m.writeUInt16BE(7, 6); m.writeUInt16BE(target, 22); m[14] = 0x31; return m; };
+
+  handleUdpPacket(sock, handshake(201), { address: '6.6.6.6', port: 9 }, 5350);
+  assert.strictEqual(a.udpEndpoint, undefined, 'handshake from another IP refused');
+  handleUdpPacket(sock, handshake(201), { address: '10.0.0.1', port: 4000 }, 5350);
+  handleUdpPacket(sock, handshake(202), { address: '10.0.0.2', port: 5000 }, 5350);
+  assert.deepStrictEqual(a.udpEndpoint, { address: '10.0.0.1', port: 4000 });
+
+  sent.length = 0;
+  handleUdpPacket(sock, frame(201, 202), { address: '10.0.0.1', port: 4000 }, 5350);
+  assert.deepStrictEqual(sent, ['10.0.0.2:5000'], 'legit frame relayed');
+  assert.ok(a.pos, 'position recorded');
+  sent.length = 0;
+  delete a.pos;
+  handleUdpPacket(sock, frame(201, 202), { address: '6.6.6.6', port: 4000 }, 5350);
+  handleUdpPacket(sock, frame(201, 202), { address: '10.0.0.1', port: 4001 }, 5350);
+  assert.deepStrictEqual(sent, [], 'frames as another player dropped');
+  assert.strictEqual(a.pos, undefined, 'spoofed frame does not move the position');
+  u2.delete(201);
+  u2.delete(202);
+  getChannel(1).rooms.delete(7);
+}
+
 // TCP: a peer that never sends '\n' is cut off instead of growing the buffer forever
 const sock = Object.assign(new EventEmitter(), { destroyed: false, write() {}, destroy() { this.destroyed = true; } });
 wrapSocket(sock, { send: 0, receive: 0 }, () => {});

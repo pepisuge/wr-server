@@ -22,6 +22,13 @@ Movement is **client-authoritative**. Relay is point-to-point: N players means N
 2. The client sends `Ping` (subcommand `0x21`), exchanging local and public endpoints. This is how a client behind NAT learns its public IP, and the **only** time the server learns the player's public endpoint.
 3. Reply: a 65-byte copy of the incoming packet with `response[17] = 0x41`, `response[64] = 0x11`, sessionId at offset 4, the endpoint seen by the server at offset 32 and the client-declared local endpoint at offset 50 (both encoded).
 
+## Endpoint checks
+
+The session id inside a datagram is the sender's word, so the server ties it to the network:
+
+- a handshake (`0x21`) for a logged-in session is ignored unless it comes from the **same IP as that player's TCP connection** (true behind NAT too; the source port can change between handshakes, e.g. 63486 then 65051 for the same session);
+- a tunnel frame is relayed (and its position recorded) only when it comes from the exact `ip:port` that session last handshook from. Real clients and the bot always send from there.
+
 ## NAT keepalive
 
 Idle NAT mappings expire (e.g. Windows ICS) and the client drops back to the server list. Every 60 s the server re-sends to each player the **same handshake reply** stored at handshake time. Any datagram refreshes the mapping.
