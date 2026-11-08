@@ -81,6 +81,16 @@ The toggle (GameSub 62) is ported. Neither reference ever reads the flag to star
 
 Carries the target slot, a `boneId` and the **weapon code** at `payload[22]`. On the killing hit the same packet is re-sent as `PlayerDeath` (152).
 
+### Hit validation
+
+The client decides what it hit, where and with which weapon; the server only checks what it can and silently drops the hit otherwise (`[anticheat]` log line):
+
+- the weapon (`payload[22]`) must be in the attacker's loadout for the class it spawned as (`Spawn` `payload[3]`);
+- at most 20 hits per second per attacker (the DB has no fire rates; the fastest real gun recorded lands ~1 hit every 85 ms, knife ~860 ms);
+- knife (`DA*`) hits need the two players within 1500 units, using their last `0x31` frame positions (skipped if either is older than 1 s). Frame positions lag what the client draws: real knife hits on a moving target were recorded up to 860 units apart, on maps ~20000 wide, so this only stops cross-map knifing.
+
+`payload[4]` is the **attacker slot** (the kill feed shows that player's name); the server overwrites it with the sender's slot. Hitbox (head/body) and the victim are still the client's word: an aimbot is not detectable this way.
+
 ### Damage formula
 
 ```

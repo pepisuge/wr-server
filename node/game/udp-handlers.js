@@ -3,7 +3,7 @@
 // ("network byte order") integers - Node's Buffer already reads/writes those
 // natively, no manual byte-reversal needed like the C# does.
 const { users, getChannel } = require('./state');
-const { recordFrame } = require('./record');
+const { recordFrame, frameStruct } = require('./record');
 
 const INITIAL = 0x1001;
 const PING = 0x1010; // also the envelope for the "tunnel" (relay) sub-packets below
@@ -132,6 +132,12 @@ function handleTunnel(socket, msg, rinfo) {
 
   const sender = users.get(sessionId);
   const target = users.get(targetId);
+  // Last known position, for gamesubs.js's melee range check. ponytail: the sender session is not authenticated yet
+  // (UDP endpoint advisory), so a spoofer could move someone's recorded position; fix together with that.
+  if (msg[14] === 0x31 && sender?.roomId === roomId) {
+    const s = frameStruct(msg);
+    if (s) sender.pos = { x: s.readFloatLE(28), h: s.readFloatLE(32), z: s.readFloatLE(36), t: Date.now() };
+  }
   if (!sender || !target || sender.roomId !== roomId || target.roomId !== roomId) return countRelay(sessionId, targetId, `drop:no-sender/target/room via ${via}`);
 
   const room = getChannel(sender.channel).rooms.get(roomId);
