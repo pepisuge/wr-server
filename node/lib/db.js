@@ -6,9 +6,7 @@ const mysql = require('mysql2/promise');
 function createPool(dbConfig) {
   const pool = mysql.createPool(dbConfig);
   const inFlight = new Set();
-  const query = pool.query.bind(pool);
-  pool.query = (...args) => {
-    const p = query(...args);
+  const track = (p) => {
     inFlight.add(p);
     p.then(
       () => inFlight.delete(p),
@@ -16,6 +14,26 @@ function createPool(dbConfig) {
     );
     return p;
   };
+  const query = pool.query.bind(pool);
+  pool.query = (...args) => track(query(...args));
+  // fn(conn) inside one transaction: committed if it resolves, rolled back if it throws. Tracked like a query.
+  pool.transaction = (fn) =>
+    track(
+      (async () => {
+        const conn = await pool.getConnection();
+        try {
+          await conn.beginTransaction();
+          const result = await fn(conn);
+          await conn.commit();
+          return result;
+        } catch (err) {
+          await conn.rollback().catch(() => {});
+          throw err;
+        } finally {
+          conn.release();
+        }
+      })()
+    );
   pool.close = async () => {
     while (inFlight.size) await Promise.allSettled([...inFlight]);
     await pool.end();

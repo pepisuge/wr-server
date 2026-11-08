@@ -51,36 +51,36 @@ function handleCoupon(db) {
       return reply(socket, -1, 0); // out of uses (or: you already used this one - same wire code, no new one invented)
     }
 
+    // Memory first (a second redeem packet meanwhile is refused), then redemption + dinars + items + uses in one
+    // transaction; the client is answered only once it is stored, and memory is undone if it isn't.
+    // No renewal of an item already owned (same simplification as shop.js).
+    const items = coupon.itemReward.filter(({ code: itemCode }) => !ownsItem(u.inventory, itemCode));
     u.redeemedCoupons.add(coupon.id);
-    db.query('INSERT INTO user_coupons (owner, coupon_id, redeemed_at) VALUES (?, ?, ?)', [
-      u.id,
-      coupon.id,
-      Math.floor(Date.now() / 1000),
-    ]).catch((err) => console.error('coupon: failed to persist redemption:', err.message));
+    u.money += coupon.dinarReward;
+    if (coupon.uses > 0) coupon.uses -= 1;
 
-    if (coupon.dinarReward > 0) {
-      u.money += coupon.dinarReward;
-      db.query('UPDATE user_details SET money = ? WHERE id = ?', [u.money, u.id]).catch((err) =>
-        console.error('coupon: failed to persist money:', err.message)
+    return db
+      .transaction(async (conn) => {
+        await conn.query('INSERT INTO user_coupons (owner, coupon_id, redeemed_at) VALUES (?, ?, ?)', [u.id, coupon.id, Math.floor(Date.now() / 1000)]);
+        if (coupon.dinarReward > 0) await conn.query('UPDATE user_details SET money = money + ? WHERE id = ?', [coupon.dinarReward, u.id]);
+        for (const { code: itemCode, days } of items) await grantItem(conn, u, itemCode, days);
+        await conn.query('UPDATE coupons SET uses = uses - 1 WHERE id = ? AND uses > 0', [coupon.id]);
+      })
+      .then(
+        () => {
+          if (coupon.dinarReward > 0) reply(socket, 0, u.money);
+          // The reference answers item rewards with the Itemshop success packet, one per item.
+          for (let i = 0; i < items.length; i++) sendShopSuccess(socket, u);
+        },
+        (err) => {
+          console.error(`coupon: redemption of ${coupon.id} by ${u.id} not stored:`, err.message);
+          u.redeemedCoupons.delete(coupon.id);
+          u.money -= coupon.dinarReward;
+          if (coupon.uses >= 0) coupon.uses += 1;
+          for (const { code: itemCode } of items) u.inventory.delete(itemCode);
+          reply(socket, -2, 0);
+        }
       );
-      reply(socket, 0, u.money);
-    }
-
-    // Reference reuses the Itemshop success packet for item rewards instead
-    // of its own Coupon packet - ported as-is, reusing shop.js's own
-    // grant/reply helpers rather than rebuilding them here.
-    for (const { code: itemCode, days } of coupon.itemReward) {
-      if (ownsItem(u.inventory, itemCode)) continue; // simplification: no renewal, see the plan (same as shop.js)
-      grantItem(db, u, itemCode, days);
-      sendShopSuccess(socket, u);
-    }
-
-    if (coupon.uses > 0) {
-      coupon.uses -= 1;
-      db.query('UPDATE coupons SET uses = ? WHERE id = ?', [coupon.uses, coupon.id]).catch((err) =>
-        console.error('coupon: failed to persist uses:', err.message)
-      );
-    }
   };
 }
 

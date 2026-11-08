@@ -179,7 +179,7 @@ async function cmdAddMoney(socket, db, args) {
     // while this one is waiting on the DB, re-reading it in the reply below
     // would report that other command's result instead of this one's.
     const newMoney = target.online.money;
-    await db.query('UPDATE user_details SET money = ? WHERE id = ?', [newMoney, target.id]);
+    await db.query('UPDATE user_details SET money = GREATEST(0, CAST(money AS SIGNED) + ?) WHERE id = ?', [amount, target.id]);
     reply(socket, `Denaro di ${target.online.displayname} ora: ${newMoney}.`);
     return scheduleReconnect(target.online, socket);
   }

@@ -195,6 +195,38 @@ const { users } = require('../game/state');
     assert.ok(settled, 'close waited for the in-flight query');
   }
 
+  // Economy: a purchase / coupon is answered only once stored, and undone in memory when the DB refuses it
+  {
+    const { loadItems } = require('../game/items');
+    const { handleItemshop } = require('../game/shop');
+    const { loadCoupons, handleCoupon } = require('../game/coupon');
+    let call = 0;
+    await loadItems({ query: async () => (call++ === 0 ? [[{ id: 1, code: 'DF03', active: 1, name: 'x', is_weapon: 1, buyable: 1, req_level: 1, req_premium: 0, cost: '100,200,300,400,500', class1: '0', class2: '0', class3: '0', class4: '0', class5: '0', power: 100 }]] : [[]]) });
+    await loadCoupons({ query: async () => [[{ id: 9, code: 'FREE', uses: 1, dinarreward: 1000, itemreward: '' }]] });
+
+    const dbWith = (affectedRows) => ({ transaction: async (fn) => fn({ query: async () => [{ affectedRows }] }) });
+    const player = () => ({ id: 1, xp: 0, premium: 0, money: 500, inventory: new Map(), redeemedCoupons: new Set() });
+    const sock = (u) => ({ user: u, replies: [], end() {}, sendPacket(id, f) { this.replies.push(f[0]); } });
+    const buy = { blocks: [String(0x456), 'DF03', '0', '0', '0'] };
+
+    let u = player();
+    let s = sock(u);
+    await handleItemshop(dbWith(1))(s, buy);
+    assert.deepStrictEqual([s.replies, u.money, u.inventory.has('DF03')], [[1], 400, true], 'purchase stored and confirmed');
+
+    u = player();
+    s = sock(u);
+    await handleItemshop(dbWith(0))(s, buy);
+    assert.deepStrictEqual([s.replies, u.money, u.inventory.has('DF03')], [[97020], 500, false], 'refused by the DB: undone');
+
+    u = player();
+    s = sock(u);
+    await handleCoupon({ transaction: async () => { throw new Error('db down'); } })(s, { blocks: ['FREE'] });
+    assert.deepStrictEqual([s.replies, u.money, u.redeemedCoupons.size], [[-2], 500, 0], 'coupon not stored: undone');
+    await handleCoupon(dbWith(1))(s, { blocks: ['FREE'] });
+    assert.deepStrictEqual([s.replies.at(-1), u.money, u.redeemedCoupons.size], [0, 1500, 1], 'coupon stored (uses were restored)');
+  }
+
   process.stdout.write('test-hardening: ok\n');
 })().catch((err) => {
   process.stderr.write(err.stack + '\n');

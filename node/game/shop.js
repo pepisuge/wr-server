@@ -55,17 +55,16 @@ function sendSuccess(socket, u, actionType = BUY_ITEM) {
   ]);
 }
 
-// Shared with coupon.js: adds one item to a user's inventory (memory first,
-// DB fire-and-forget after) without touching money - the buy flow below
-// deducts price itself before calling this, coupon grants are free.
-function grantItem(db, u, code, days) {
+// Adds one item to a user's inventory: memory now, and returns the INSERT's promise (q = the pool or a transaction's
+// connection). No money involved: the buy flow charges separately, coupon and GM grants are free.
+function grantItem(q, u, code, days) {
   const now = Math.floor(Date.now() / 1000);
   const lengthSeconds = 86400 * days;
   u.inventory.set(code, { expireDate: now + lengthSeconds, retail: false });
-  db.query(
+  return q.query(
     'INSERT INTO user_inventory (owner, code, startdate, length, price, expired, deleted) VALUES (?, ?, ?, ?, 0, 0, 0)',
     [u.id, code, now, lengthSeconds]
-  ).catch((err) => console.error('shop: failed to persist granted item:', err.message));
+  );
 }
 
 // The reverse of grantItem - spends one owned item. Used below for CB01/CB03
@@ -164,16 +163,24 @@ function handleItemshop(db) {
     if (u.money < price) return sendError(socket, ERROR.NOT_ENOUGH_DINAR);
     if (ownsItem(u.inventory, itemCode)) return sendError(socket, ERROR.CANNOT_BE_BOUGHT);
 
-    // Memory first (source of truth for the reply below and for any
-    // immediately-following packet), DB write fire-and-forget after - same
-    // pattern as clan.js/gm.js, avoids the same kind of same-tick race.
+    // Memory first, so a second buy packet arriving meanwhile already sees the new balance/item. The charge and the
+    // item are one transaction, and the client hears "bought" only once it is stored; on failure memory is undone.
     u.money -= price;
-    db.query('UPDATE user_details SET money = ? WHERE id = ?', [u.money, u.id]).catch((err) =>
-      console.error('shop: failed to persist money:', err.message)
-    );
-    grantItem(db, u, itemCode, DAYS[lengthIdx]);
-
-    sendSuccess(socket, u);
+    return db
+      .transaction(async (conn) => {
+        const [res] = await conn.query('UPDATE user_details SET money = money - ? WHERE id = ? AND money >= ?', [price, u.id, price]);
+        if (res.affectedRows !== 1) throw new Error('balance in DB lower than in memory');
+        await grantItem(conn, u, itemCode, DAYS[lengthIdx]);
+      })
+      .then(
+        () => sendSuccess(socket, u),
+        (err) => {
+          console.error(`shop: purchase of ${itemCode} by ${u.id} not stored:`, err.message);
+          u.money += price;
+          u.inventory.delete(itemCode);
+          sendError(socket, ERROR.CANNOT_BE_BOUGHT);
+        }
+      );
   };
 }
 
