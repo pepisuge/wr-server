@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { promisify } = require('util');
 const { getAllAuthorized } = require('./server-manager');
 const { PORTS } = require('../lib/constants');
 
@@ -30,6 +31,30 @@ function localIp(socket) {
 
 function sha256(str) {
   return crypto.createHash('sha256').update(str, 'ascii').digest('hex');
+}
+
+// Password storage, no schema change: users.password char(64) holds a 32-byte hash as hex, users.passwordsalt char(10)
+// the salt. A salt starting with '$' means scrypt (stdlib); otherwise the upstream SHA-256(password + salt), which is
+// upgraded to scrypt on the next successful login.
+const scrypt = promisify(crypto.scrypt);
+
+async function hashPassword(password, salt) {
+  return salt.startsWith('$') ? (await scrypt(password, salt, 32)).toString('hex') : sha256(password + salt);
+}
+
+function newScryptSalt() {
+  return '$' + crypto.randomBytes(7).toString('base64url').slice(0, 9); // 54 random bits, fits char(10)
+}
+
+function sameHash(a, b) {
+  const x = Buffer.from(a, 'hex');
+  const y = Buffer.from(String(b).toLowerCase(), 'hex');
+  return x.length === 32 && y.length === 32 && crypto.timingSafeEqual(x, y);
+}
+
+async function upgradeToScrypt(db, userId, password) {
+  const salt = newScryptSalt();
+  await db.query('UPDATE users SET password = ?, passwordsalt = ? WHERE id = ?', [await hashPassword(password, salt), salt, userId]);
 }
 
 // Same order as the client's version.cfg: Format, Launcher, Updater, Client, Sub, Option.
@@ -110,12 +135,14 @@ function createHandlers(db) {
     }
 
     const user = rows[0];
-    const hashed = sha256(password + user.passwordsalt);
-    if (hashed !== user.password.toLowerCase()) {
+    if (!sameHash(await hashPassword(password, user.passwordsalt), user.password)) {
       noteFailedLogin(ip);
       return sendLoginError(socket, ERROR_CODES.wrongPassword);
     }
     fails.delete(ip);
+    if (!user.passwordsalt.startsWith('$')) {
+      upgradeToScrypt(db, user.id, password).catch((err) => console.error('login: password hash upgrade failed:', err.message));
+    }
     if (user.status <= 0) return sendLoginError(socket, ERROR_CODES.banned);
 
     const sessionId = allocSessionId();
@@ -137,4 +164,4 @@ function createHandlers(db) {
   return { [LAUNCHER]: handleLauncher, [SERVER_LIST]: handlePlayerLogin };
 }
 
-module.exports = { createHandlers };
+module.exports = { createHandlers, hashPassword };

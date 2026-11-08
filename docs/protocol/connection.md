@@ -45,6 +45,10 @@ OUT id=4352 blocks=[1, 100, 0, <user>, NULL, <nick>, 24693, 1, 0, 1, 1, 1, Spain
 
 Errors: `72010` unknown user, `72020` wrong password, `73050` banned (`users.status <= 0`), `74010`/`74020` empty fields.
 
+**Password storage**: `users.password` (char 64) and `users.passwordsalt` (char 10). A salt starting with `$` means scrypt (Node stdlib, 32-byte key, hex); otherwise it is the upstream `SHA-256(password + salt)`, upgraded to scrypt on the next successful login. No schema change, and accounts created by hand with `SHA2(CONCAT(pw, salt), 256)` keep working.
+
+**Client-facing limits** (login and game ports, not the internal channel): at most 10 open connections per IP (`WR_MAX_CONN_PER_IP`) and 50 packets per second per connection (real clients peak at ~5); over either, the connection is closed.
+
 After 5 failed logins (unknown user or wrong password) from one IP within 5 minutes, that IP gets `72020` for every login until the window ends, right password included.
 
 - **An extra field shifts everything.** The C# sends a version field (`1.11025`) before the server count. Client 22 needs it (the server sends it); an older 17.x build showed the server as "full" with a garbage name when it was present. Every field is read blindly by position.
