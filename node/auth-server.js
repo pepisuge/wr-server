@@ -1,6 +1,6 @@
 const net = require('net');
 const config = require('./lib/config');
-const { createPool } = require('./lib/db');
+const { createPool, onShutdown } = require('./lib/db');
 const { wrapSocket, sendGreeting, admitConnection, MAX_PACKETS_PER_SEC } = require('./lib/xor-socket');
 const { PORTS, XOR } = require('./lib/constants');
 const { createHandlers } = require('./auth/handlers');
@@ -45,8 +45,14 @@ async function main() {
   await db.query('SELECT 1');
   console.log('Authorization server: DB ok.');
 
-  startListener(PORTS.login, XOR.external, 'Login', createHandlers(db), true);
-  startListener(PORTS.internal, XOR.internalAuth, 'Internal', internalHandlers);
+  const login = startListener(PORTS.login, XOR.external, 'Login', createHandlers(db), true);
+  const internal = startListener(PORTS.internal, XOR.internalAuth, 'Internal', internalHandlers);
+
+  onShutdown('Authorization server', async () => {
+    login.close();
+    internal.close();
+    await db.close(); // e.g. a password hash upgrade still being written
+  });
 }
 
 main().catch((err) => {

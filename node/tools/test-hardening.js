@@ -185,6 +185,16 @@ const { users } = require('../game/state');
     assert.ok(admitConnection(conn()), 'a slot frees up when one closes');
   }
 
+  // Shutdown: pool.close() waits for queries still in flight instead of failing them
+  {
+    const { createPool } = require('../lib/db');
+    const pool = createPool({ host: '127.0.0.1', port: 1, user: 'x', connectTimeout: 2000 });
+    let settled = false;
+    pool.query('SELECT 1').catch(() => { settled = true; });
+    await pool.close();
+    assert.ok(settled, 'close waited for the in-flight query');
+  }
+
   process.stdout.write('test-hardening: ok\n');
 })().catch((err) => {
   process.stderr.write(err.stack + '\n');
