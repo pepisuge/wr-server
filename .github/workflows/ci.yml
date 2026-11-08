@@ -1,7 +1,14 @@
 name: CI
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -10,12 +17,16 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          cache: npm
+          cache-dependency-path: node/package-lock.json
       - run: cd node && npm ci
       - name: Syntax check
         run: find node -name '*.js' -not -path '*/node_modules/*' -print0 | xargs -0 -n1 node --check
+      - name: Trust-boundary tests (no DB)
+        run: node node/tools/test-hardening.js
       - name: Forbidden files
         run: |
-          if git ls-files | grep -Ei '\.(exe|dll|rar|zip|7z|dds|tga|bin)$|items\.bin|weapondata'; then exit 1; fi
+          if git ls-files | grep -Ei '\.(exe|dll|rar|zip|7z|dds|tga|bin|pak|dmp|wrf)$|items\.bin|weapondata|\.env$'; then exit 1; fi
 
   docker:
     runs-on: ubuntu-latest
@@ -31,6 +42,12 @@ jobs:
         run: |
           docker compose -f docker/docker-compose.yml exec -T db mariadb -uroot -pchangeme wres2 \
             -e "SELECT is_gm, mutedexpire FROM user_details LIMIT 1; SELECT COUNT(*) FROM user_coupons; SELECT COUNT(*) FROM masterserver.users;"
+      - name: Login end to end
+        run: |
+          docker compose -f docker/docker-compose.yml exec -T db mariadb -uroot -pchangeme masterserver \
+            -e "INSERT INTO users VALUES (900,'citest',1,'CITest',SHA2('cipass123aaaaaaaaaa',256),'aaaaaaaaaa')"
+          node node/tools/smoke-login.js citest cipass123   # from the runner: 5330/5340 are published
+          docker compose -f docker/docker-compose.yml exec -T game node tools/test-gamesubs.js
       - name: Logs
         if: always()
         run: docker compose -f docker/docker-compose.yml logs

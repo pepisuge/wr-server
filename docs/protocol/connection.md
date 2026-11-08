@@ -45,7 +45,7 @@ OUT id=4352 blocks=[1, 100, 0, <user>, NULL, <nick>, 24693, 1, 0, 1, 1, 1, Spain
 
 Errors: `72010` unknown user, `72020` wrong password, `73050` banned (`users.status <= 0`), `74010`/`74020` empty fields.
 
-- **An extra field shifts everything.** The C# sends a version field (`1.11025`) before the server count; including it made the client show the server as "full" with a garbage name. Every field is read blindly by position.
+- **An extra field shifts everything.** The C# sends a version field (`1.11025`) before the server count. Client 22 needs it (the server sends it); an older 17.x build showed the server as "full" with a garbage name when it was present. Every field is read blindly by position.
 - **The server IP in the list** is the local address of the incoming TCP connection (`socket.localAddress` without `::ffff:`), not a configured IP: a hardcoded `127.0.0.1` breaks every non-local client. Auth and Game run on the same host and listen on all interfaces.
 
 ## Internal channel: Game registers with Auth (5012)
@@ -55,15 +55,18 @@ Game -> Auth   connect :5012
 Auth -> Game   Connection (4608) [nonce, 77]
 Game -> Auth   Authorization (4096) [1, key, "Spain ", ip, port, type]
 Auth -> Game   Authorize (4096) [1, serverId]
+Auth -> Game   PlayerAuthorization (4864) [sessionId, userId, username, displayname]   on every login
 ```
 
-The connection is a single `net.connect` without retry: start Auth before Game.
+- Auth **checks the key** against `game.serverKey` (env `GAME_SERVER_KEY`) and refuses other registrations: a registered server receives every login's session. The reference reads the key but never checks it. Change the default key and never expose 5012.
+- `PlayerAuthorization` is pushed to every registered Game server *before* the server list reaches the client. Game only accepts an `Authorization` (25088) whose `sessionId`, `userId` and `username` match one of these (12 h TTL). The reference does the same check as a Game->Auth request on the same id; a push is simpler here because both run side by side.
+- Game reconnects every 3 s if Auth goes away, so start order does not matter.
 
 ## Game server authorization
 
 **`ServerTime` (24832)** doubles as an anti-cheat check: the client sends `versionId=3` and its **MAC address** (12 hex chars), checked against `macaddress_blacklist`. The reply is the time as slash-separated fields (`sec/min/hour/day/month(0-based)/year-1900/week/yearDay/0`).
 
-**`Authorization` (25088)**: the client sends back the `sessionId` from login. The reply is large: account, clan, level, inventory, equipment, slots (`F,F,F,F` = 4 inventory slots disabled, `^` = no item) and the **five class loadouts**, sent once per session only.
+**`Authorization` (25088)**: the client sends back the `sessionId` from login (`[userId, ?, username, displayname, sessionId, ?, ?, accessLevel]`). It is only accepted for a session Auth announced (see the internal channel above); the displayname comes from Auth, not from the packet. The reply is large: account, clan, level, inventory, equipment, slots (`F,F,F,F` = 4 inventory slots disabled, `^` = no item) and the **five class loadouts**, sent once per session only.
 
 Level, money and the 5th inventory slot are only read from this packet, so changes during a session are invisible until re-login (`/setlevel` and `/addmoney` disconnect the target; `/setpremium` does not).
 
