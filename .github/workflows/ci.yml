@@ -48,6 +48,13 @@ jobs:
             -e "INSERT INTO users VALUES (900,'citest',1,'CITest',SHA2('cipass123aaaaaaaaaa',256),'aaaaaaaaaa')"
           node node/tools/smoke-login.js citest cipass123   # from the runner: 5330/5340 are published
           docker compose -f docker/docker-compose.yml exec -T game node tools/test-gamesubs.js
+      - name: Graceful shutdown (SIGTERM)
+        run: |
+          docker compose -f docker/docker-compose.yml stop game auth
+          [ "$(docker compose -f docker/docker-compose.yml logs game auth | grep -c 'stopped cleanly')" = 2 ]
+          for s in game auth; do
+            [ "$(docker inspect -f '{{.State.ExitCode}}' "$(docker compose -f docker/docker-compose.yml ps -aq $s)")" = 0 ]
+          done
       - name: Logs
         if: always()
         run: docker compose -f docker/docker-compose.yml logs

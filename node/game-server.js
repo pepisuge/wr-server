@@ -1,7 +1,8 @@
 const net = require('net');
 const dgram = require('dgram');
 const config = require('./lib/config');
-const { createPool } = require('./lib/db');
+const { createPool, onShutdown } = require('./lib/db');
+const { users } = require('./game/state');
 const { wrapSocket, sendGreeting, admitConnection, MAX_PACKETS_PER_SEC } = require('./lib/xor-socket');
 const { PORTS, XOR } = require('./lib/constants');
 const { DEBUG } = require('./lib/log');
@@ -71,8 +72,10 @@ async function main() {
   });
   gameListener.listen(PORTS.game, () => console.log(`Game: listening on ${PORTS.game}`));
 
+  const udpSockets = [];
   for (const port of [PORTS.udp1, PORTS.udp2]) {
     const udp = dgram.createSocket('udp4');
+    udpSockets.push(udp);
     // Same crash the TCP socket.on('error', ...) above already guards against:
     // sending to a peer that just disconnected raises ECONNRESET here too,
     // and dgram sockets have no default handler for it either.
@@ -84,6 +87,15 @@ async function main() {
   connectToAuthServer(config.game);
   startPingLoop(db);
   startUdpKeepalive();
+
+  onShutdown('Game server', async () => {
+    gameListener.close();
+    for (const udp of udpSockets) udp.close();
+    // Each player's normal 'close' cleanup runs (room leave, match rewards), queuing its DB writes.
+    for (const u of users.values()) u.socket.destroy();
+    await new Promise((resolve) => setImmediate(resolve));
+    await Promise.all([db.close(), authDb.close()]);
+  });
 }
 
 main().catch((err) => {
