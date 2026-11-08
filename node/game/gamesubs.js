@@ -525,6 +525,7 @@ function handlePlayerDamage(room, player, payload, u, db) {
   record({ e: 'hit', from: player.slot, to: victim.slot, bone: hsCalc, weapon, dmg: damage, hs: headshot, hp: victim.health });
 
   const out = [...payload];
+  out[4] = player.slot; // attacker slot: the kill feed names this one (real captures: slot 0 -> 0, slot 4 -> 4); never the client's word
   out[12] = victim.health;
   out[13] = previousHealth;
   // shootenPart, the client's headshot hit-marker: offset 17 for the older

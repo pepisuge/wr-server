@@ -89,7 +89,7 @@ The client decides what it hit, where and with which weapon; the server only che
 - at most 20 hits per second per attacker (the DB has no fire rates; the fastest real gun recorded lands ~1 hit every 85 ms, knife ~860 ms);
 - knife (`DA*`) hits need the two players within 1500 units, using their last `0x31` frame positions (skipped if either is older than 1 s). Frame positions lag what the client draws: real knife hits on a moving target were recorded up to 860 units apart, on maps ~20000 wide, so this only stops cross-map knifing.
 
-Hitbox (head/body) and the victim are still the client's word: an aimbot is not detectable this way.
+`payload[4]` is the **attacker slot** (the kill feed shows that player's name); the server overwrites it with the sender's slot. Hitbox (head/body) and the victim are still the client's word: an aimbot is not detectable this way.
 
 ### Damage formula
 
