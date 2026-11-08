@@ -18,6 +18,7 @@ permalink: /protocol/reference
 |---|---|---|---|
 | `0x1200` | 4608 | `CONNECTION` | Auth->Game |
 | `0x1000` | 4096 | `AUTHORIZATION` (server registration / confirm) | both |
+| `0x1300` | 4864 | `PLAYER_AUTHORIZATION` (login session for the game server) | Auth->Game |
 
 ## TCP opcodes: game channel (5340)
 

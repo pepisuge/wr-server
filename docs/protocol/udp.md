@@ -28,22 +28,33 @@ Idle NAT mappings expire (e.g. Windows ICS) and the client drops back to the ser
 
 ## Movement packet body (subcommand `0x31`)
 
-The first 29 bytes are plaintext; the body is XORed with `0xC3` (runs of `c3` are encrypted zeros). Decoded float fields:
+The first 29 bytes are plaintext; the body is XORed with `0xC3` (runs of `c3` are encrypted zeros). Decrypted body = `[len hi][0x60-byte struct]`; offsets below are inside the struct (add 1 for the body offset). Decoded with `WR_UDP_DUMP` recordings of controlled actions on client 22.
 
-| body offset | meaning |
+| struct offset | meaning |
 |---|---|
-| 9 | aim yaw (0-360 degrees) |
-| 13 and 41 | the same value twice, looks like a heading |
-| 17 | always 1.0 |
-| **29** | **X coordinate** (confirmed) |
-| 33 | unknown, **not** Y |
-| **37** | **Z coordinate** (confirmed) |
-| **61** | **health** (confirmed) |
+| 0-1 | sender slot (u16 LE) |
+| 2 / 3 / 4 / 5 | moving forward / back / right / left (bytes) |
+| f@12 (copy f@40) | **yaw**, degrees |
+| f@44 | **pitch**, degrees (f@8 = 360 - pitch) |
+| 20 | crouched |
+| 22 | state: 0 still, 1 walking, 2 jumping |
+| 24 / 26 | firing state |
+| f@28 / f@32 / f@36 | **X / height / Z** (copies at 72-80 and 84-92; eye = height + ~24.2) |
+| f@56 | eye height / bob (18.2 standing, 15.6 crouched) |
+| f@60 | **health** % |
+| 65-68 | weapon / ammo (byte 68 = rounds) |
 
-Confirmed by comparing with the target position that `PlayerDamage` carries in plaintext over TCP.
+Walking forward moves along `(sin yaw, -cos yaw)` at ~75 units/s. Position matches the target position `PlayerDamage` carries in plaintext over TCP.
 
 Only `0x31` has been observed from a real client during normal movement; `0x10`/`0x30`/`0x32`/`0x34` have never been captured.
 
-## Open problem: the invisible fake player
+## Tunnel header: what the receiving client validates
 
-A scripted client can do everything right protocol-wise (roster, scoreboard, spawn broadcast, continuous UDP stream replaying real captures) and still **never be drawn** as a character on a real client. Spawn timing, the UDP stream, GameSub 402 and the spawn payload shape have been excluded by live tests. What makes the client draw a remote character lives in the executable. Don't retry without a new capture or clue.
+A scripted client used to be invisible on a real client (client 22) even with a perfect roster and UDP stream. The receiver drops a game frame unless:
+
+- bytes 6-7 (u16 BE) = the local room id;
+- bytes **8-9 = the sender's room slot** (index into the receiver's peer table);
+- bytes 4-5 = the sender's session id, matching that peer;
+- once the peer is "connected", bytes 10-13 (nonce) match the one it first used.
+
+Copying another player's header (bytes 8-9 = their slot) is what made every frame get discarded. Bytes 26-27 = target slot.

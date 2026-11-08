@@ -11,6 +11,7 @@ const { handleItemshop, ITEMSHOP } = require('./shop');
 const { loadUserInventory, loadUserEquipment, buildItemlist, buildSlotState } = require('./inventory');
 const { loadRedeemedCoupons, handleCoupon, COUPON } = require('./coupon');
 const { handlePingReply, PING } = require('./ping');
+const { findSession } = require('./internal-client');
 
 const SERVER_TIME = 0x6100;
 const AUTHORIZATION = 0x6200;
@@ -77,22 +78,17 @@ function createHandlers(db) {
   }
 
   // Ported from Game/Handlers/Authorization.cs + Game/Packets/Authorization.cs.
-  // ponytail: doesn't validate sessionId against the Auth server yet (no
-  // PlayerAuthorization round-trip, no Session/Activate state machine the
-  // reference builds for that) - trusts whatever the client sends. What it
-  // does check is the actual complaint that mattered here: the same account
-  // connected twice at once. That's a single Map scan keyed by userId,
-  // cheaper than porting the reference's two-server session handshake for
-  // the same guarantee. Add the full round-trip if sessionId spoofing itself
-  // becomes a real concern.
+  // Every field here is client-controlled: the session must have been announced by Auth at login
+  // (PLAYER_AUTHORIZATION, see internal-client.js) for this userId/username.
+  // Displayname comes from Auth too. blocks[7] (AccessLevel) is ignored: GM rights come from user_details.is_gm.
   async function handleAuthorization(socket, pkt) {
     const userId = Number(pkt.blocks[0]);
     const username = pkt.blocks[2] || '';
-    const displayname = pkt.blocks[3] || '';
     const sessionId = Number(pkt.blocks[4]);
-    const accessLevel = Number(pkt.blocks[7]) || 0;
+    const session = userId > 0 && sessionId > 0 ? findSession(sessionId, userId, username) : null;
+    const displayname = session?.displayname;
 
-    if (!(userId > 0 && username.length > 2 && displayname.length > 2 && sessionId > 0)) {
+    if (!session) {
       socket.sendPacket(AUTHORIZATION, [73030]); // NormalProcedure
       socket.end();
       return;

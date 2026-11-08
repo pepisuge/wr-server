@@ -158,7 +158,16 @@ function countRelay(from, to, what) {
   }, 5000);
 }
 
+// Never throws: a throw in a dgram listener is an uncaught exception, and one 1-byte datagram used to kill the server.
 function handleUdpPacket(socket, msg, rinfo, port) {
+  try {
+    dispatch(socket, msg, rinfo, port);
+  } catch (err) {
+    console.log(`UDP:${port} bad packet from ${rinfo.address}:${rinfo.port} (${msg.length} bytes): ${err.message}`);
+  }
+}
+
+function dispatch(socket, msg, rinfo, port) {
   const type = msg.readUInt16BE(0);
 
   if (type === INITIAL) return handleInitial(socket, msg, rinfo, port);

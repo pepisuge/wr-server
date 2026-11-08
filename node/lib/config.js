@@ -13,5 +13,6 @@ overlay(config.auth.db);
 overlay(config.game.db);
 if (process.env.GAME_AUTH_HOST) config.game.authServerIp = process.env.GAME_AUTH_HOST;
 if (process.env.GAME_SERVER_IP) config.game.serverIp = process.env.GAME_SERVER_IP;
+if (process.env.GAME_SERVER_KEY) config.game.serverKey = process.env.GAME_SERVER_KEY; // shared by Auth and Game, see auth/internal-handlers.js
 
 module.exports = config;

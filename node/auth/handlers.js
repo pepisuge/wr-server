@@ -4,6 +4,7 @@ const { PORTS } = require('../lib/constants');
 
 const LAUNCHER = 0x1010; // aka LPATCH: client asking "am I on the latest patch?"
 const SERVER_LIST = 0x1100; // request = login attempt, reply = server list (or an error code)
+const PLAYER_AUTHORIZATION = 0x1300; // internal, Auth -> Game: [sessionId, userId, username, displayname]
 
 const ERROR_CODES = {
   wrongUser: 72010,
@@ -88,15 +89,12 @@ function createHandlers(db) {
     if (hashed !== user.password.toLowerCase()) return sendLoginError(socket, ERROR_CODES.wrongPassword);
     if (user.status <= 0) return sendLoginError(socket, ERROR_CODES.banned);
 
-    // ponytail: no session bookkeeping yet (no duplicate-login check, no
-    // link to the Game server's own auth check) - add when Phase 3 needs it.
     const sessionId = allocSessionId();
     const servers = getAllAuthorized();
+    // Tell every game server which account owns this session before the client can reach them: game/handlers.js
+    // accepts an Authorization only for a session announced here (the client's own userId/sessionId are spoofable).
+    for (const s of servers) s.socket.sendPacket(PLAYER_AUTHORIZATION, [sessionId, user.id, username, user.displayname]);
 
-    // Note: the C# reference appends a "1.11025 // PF_20" version field here,
-    // but this client build (17.2) showed a field-shifted, garbled server
-    // list when we included it - dropped until we confirm what this client
-    // actually expects at this position.
     // Client 22 expects the C# reference's "1.11025 // PF_20" version field here (client 17 didn't).
     const fields = [1, user.id, 0, username, 'NULL', user.displayname, sessionId, 1, 0, user.status, 1.11025, servers.length];
     const gameIp = localIp(socket);
