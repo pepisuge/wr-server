@@ -32,6 +32,7 @@ Protocol reference: [`docs/protocol`](docs/protocol/index.md), also published at
 | `GAME_SERVER_KEY` | shared Auth/Game key for the internal channel: **change it** on any reachable host |
 | `WR_PATCH_URL` | patch base URL sent to the launcher (default `http://<auth address>/wr/`) |
 | `WR_SERVER_TYPE` | server type sent in the list (client 22 test: 65..70) |
+| `WR_MAX_CONN_PER_IP` | open connections allowed per client IP (default 10); raise it behind Docker Desktop or a proxy, where every client shares one IP |
 | `WR_PONG_TIMEOUT_MS` | liveness timeout (raise it while a debugger pauses the client) |
 | `WR_UDP_DUMP` / `WR_RECORD` | append raw UDP tunnel packets / decoded movement+hit events to a JSONL file |
 

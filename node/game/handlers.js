@@ -51,6 +51,10 @@ function buildServerTimeField() {
   ].join('/');
 }
 
+// userIds between the "already online?" check and users.set(): the DB loads in between are awaited, so without this two
+// Authorizations of the same account arriving together would both pass the check.
+const joining = new Set();
+
 function createHandlers(db) {
   // Ported from Game/Handlers/RequestServerTime.cs. The client sends this
   // right after connecting, as a "am I banned by hardware" pre-check before
@@ -101,25 +105,34 @@ function createHandlers(db) {
         return;
       }
     }
-    if (users.has(sessionId)) {
+    if (users.has(sessionId) || joining.has(userId)) {
       socket.sendPacket(AUTHORIZATION, [92040]); // IdInUse
       socket.end();
       return;
     }
 
-    // Fase 5/6: real xp/money/premium from user_details, row created with
-    // the reference's defaults on first login (see progression.js).
-    const row = await loadUserDetails(db, userId);
+    joining.add(userId);
+    let loaded;
+    try {
+      // user_details row created with the reference's defaults on first login (see progression.js)
+      loaded = await Promise.all([
+        loadUserDetails(db, userId),
+        loadUserInventory(db, userId),
+        loadUserEquipment(db, userId),
+        loadRedeemedCoupons(db, userId),
+      ]);
+    } finally {
+      joining.delete(userId);
+    }
+    if (socket.destroyed) return; // dropped while loading: don't register a ghost
+    const [row, inventory, equipment, redeemedCoupons] = loaded;
+
     const { premium, expireDate } = effectivePremium(row);
     const xp = Number(row.xp);
     const money = Number(row.money);
     const clanId = Number(row.clanid);
     const clanRank = Number(row.clanrank);
     const clan = clanInfo({ clanId, clanRank });
-
-    const inventory = await loadUserInventory(db, userId);
-    const equipment = await loadUserEquipment(db, userId);
-    const redeemedCoupons = await loadRedeemedCoupons(db, userId);
 
     const fields = [
       1, // Error_OK

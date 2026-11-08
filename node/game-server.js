@@ -2,7 +2,7 @@ const net = require('net');
 const dgram = require('dgram');
 const config = require('./lib/config');
 const { createPool } = require('./lib/db');
-const { wrapSocket, sendGreeting } = require('./lib/xor-socket');
+const { wrapSocket, sendGreeting, admitConnection, MAX_PACKETS_PER_SEC } = require('./lib/xor-socket');
 const { PORTS, XOR } = require('./lib/constants');
 const { connectToAuthServer } = require('./game/internal-client');
 const { createHandlers } = require('./game/handlers');
@@ -45,6 +45,7 @@ async function main() {
   const handlers = createHandlers(db);
   const gameListener = net.createServer((socket) => {
     console.log(`Game: connection from ${socket.remoteAddress}:${socket.remotePort}`);
+    if (!admitConnection(socket)) return;
     socket.setNoDelay(true); // avoid Nagle batching consecutive sends (room join, gunfire) into a laggy single flush
     wrapSocket(socket, XOR.external, (pkt) => {
       logPacket('Game IN', pkt);
@@ -62,7 +63,7 @@ async function main() {
           console.error(`Game handler id=${pkt.id} failed:`, err.message);
         }
       }
-    });
+    }, MAX_PACKETS_PER_SEC);
     sendGreeting(socket);
     socket.on('close', () => console.log('Game: disconnected'));
     socket.on('error', (err) => console.log(`Game: socket error: ${err.message}`));
