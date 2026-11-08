@@ -45,6 +45,8 @@ OUT id=4352 blocks=[1, 100, 0, <user>, NULL, <nick>, 24693, 1, 0, 1, 1, 1, Spain
 
 Errors: `72010` unknown user, `72020` wrong password, `73050` banned (`users.status <= 0`), `74010`/`74020` empty fields.
 
+After 5 failed logins (unknown user or wrong password) from one IP within 5 minutes, that IP gets `72020` for every login until the window ends, right password included.
+
 - **An extra field shifts everything.** The C# sends a version field (`1.11025`) before the server count. Client 22 needs it (the server sends it); an older 17.x build showed the server as "full" with a garbage name when it was present. Every field is read blindly by position.
 - **The server IP in the list** is the local address of the incoming TCP connection (`socket.localAddress` without `::ffff:`), not a configured IP: a hardcoded `127.0.0.1` breaks every non-local client. Auth and Game run on the same host and listen on all interfaces.
 
@@ -59,7 +61,7 @@ Auth -> Game   PlayerAuthorization (4864) [sessionId, userId, username, displayn
 ```
 
 - Auth **checks the key** against `game.serverKey` (env `GAME_SERVER_KEY`) and refuses other registrations: a registered server receives every login's session. The reference reads the key but never checks it. Change the default key and never expose 5012.
-- `PlayerAuthorization` is pushed to every registered Game server *before* the server list reaches the client. Game only accepts an `Authorization` (25088) whose `sessionId`, `userId` and `username` match one of these (12 h TTL). The reference does the same check as a Game->Auth request on the same id; a push is simpler here because both run side by side.
+- `PlayerAuthorization` is pushed to every registered Game server *before* the server list reaches the client. Game only accepts an `Authorization` (25088) whose `sessionId`, `userId` and `username` match one of these; each session is **single-use** and expires after 10 min (client 22 goes back through Auth, with a new session, on every reconnect). The reference does the same check as a Game->Auth request on the same id; a push is simpler here because both run side by side.
 - Game reconnects every 3 s if Auth goes away, so start order does not matter.
 
 ## Game server authorization

@@ -5,16 +5,16 @@ const { PORTS, XOR } = require('../lib/constants');
 const CONNECTION = 0x1200; // greeting the Auth server sends right on accept
 const AUTHORIZATION = 0x1000;
 const PLAYER_AUTHORIZATION = 0x1300;
-// ponytail: kept (not single-use) so a client reconnecting to Game without a new login still works; concurrent use is
-// already blocked by the IdInUse check. Make it single-use once client 22's reconnect behaviour is known.
-const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+// Single-use: client 22 goes back through Auth (new session) on every reconnect, verified live.
+const SESSION_TTL_MS = 10 * 60 * 1000; // login -> game connect takes seconds
 
-// sessionId -> { userId, username, displayname, at }: logins announced by Auth, checked by game/handlers.js.
+// sessionId -> { userId, username, displayname, at }: logins announced by Auth, consumed by game/handlers.js.
 const pendingSessions = new Map();
 
-function findSession(sessionId, userId, username) {
+function takeSession(sessionId, userId, username) {
   const s = pendingSessions.get(sessionId);
   if (!s || s.userId !== userId || s.username.toLowerCase() !== username.toLowerCase() || Date.now() - s.at > SESSION_TTL_MS) return null;
+  pendingSessions.delete(sessionId);
   return s;
 }
 
@@ -55,4 +55,4 @@ function connectToAuthServer(config) {
   return socket;
 }
 
-module.exports = { connectToAuthServer, findSession, pendingSessions };
+module.exports = { connectToAuthServer, takeSession, pendingSessions };

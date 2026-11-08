@@ -1,5 +1,5 @@
 // End-to-end login against running servers (used by CI's docker job): node tools/smoke-login.js <user> <password> [host]
-// Login (5330) -> session -> game Authorization (5340) must succeed; the same packet with another userId must be refused.
+// Login (5330) -> session -> game Authorization (5340) must succeed; the same packet with another userId or a replayed session must be refused.
 const assert = require('assert');
 const net = require('net');
 const { wrapSocket } = require('../lib/xor-socket');
@@ -31,6 +31,8 @@ function request(port, id, fields) {
 
   const spoof = await request(5340, 0x6200, [Number(userId) + 1, 0, user, 'x', sessionId]);
   assert.strictEqual(spoof.blocks[0], '73030', 'spoofed userId must be refused');
+  const replay = await request(5340, 0x6200, [userId, 0, user, 'x', sessionId]);
+  assert.strictEqual(replay.blocks[0], '73030', 'a session is single-use');
   process.stdout.write('smoke-login: ok\n');
 })().catch((err) => {
   console.error('smoke-login:', err.message);

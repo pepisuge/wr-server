@@ -66,6 +66,25 @@ function allocSessionId() {
   return id;
 }
 
+// Failed-login throttle per IP: MAX_FAILS wrong user/password within FAIL_WINDOW_MS lock that IP out until the window
+// ends. Per IP, not per account, so nobody can lock a victim out of their own account.
+const MAX_FAILS = 5;
+const FAIL_WINDOW_MS = 5 * 60 * 1000;
+const fails = new Map(); // ip -> { n, since }
+
+function isLockedOut(ip, now = Date.now()) {
+  const f = fails.get(ip);
+  if (f && now - f.since > FAIL_WINDOW_MS) fails.delete(ip);
+  return (fails.get(ip)?.n ?? 0) >= MAX_FAILS;
+}
+
+function noteFailedLogin(ip, now = Date.now()) {
+  if (fails.size > 10000) for (const [k, f] of fails) if (now - f.since > FAIL_WINDOW_MS) fails.delete(k);
+  const f = fails.get(ip) ?? { n: 0, since: now };
+  f.n++;
+  fails.set(ip, f);
+}
+
 function createHandlers(db) {
   // Ported from Authorization/Handlers/PlayerLogin.cs + Packets/ServerList.cs.
   // Field indices (blocks[2]=username, blocks[3]=password) come straight
@@ -78,15 +97,25 @@ function createHandlers(db) {
     if (username.length < 3 || !isAlphaNumeric(username)) return sendLoginError(socket, ERROR_CODES.enterIdError);
     if (password.length < 3) return sendLoginError(socket, ERROR_CODES.enterPasswordError);
 
+    const ip = socket.remoteAddress;
+    if (isLockedOut(ip)) return sendLoginError(socket, ERROR_CODES.wrongPassword); // same answer as a wrong password
+
     const [rows] = await db.query(
       'SELECT id, status, displayname, password, passwordsalt FROM users WHERE username = ?',
       [username]
     );
-    if (rows.length === 0) return sendLoginError(socket, ERROR_CODES.wrongUser);
+    if (rows.length === 0) {
+      noteFailedLogin(ip);
+      return sendLoginError(socket, ERROR_CODES.wrongUser);
+    }
 
     const user = rows[0];
     const hashed = sha256(password + user.passwordsalt);
-    if (hashed !== user.password.toLowerCase()) return sendLoginError(socket, ERROR_CODES.wrongPassword);
+    if (hashed !== user.password.toLowerCase()) {
+      noteFailedLogin(ip);
+      return sendLoginError(socket, ERROR_CODES.wrongPassword);
+    }
+    fails.delete(ip);
     if (user.status <= 0) return sendLoginError(socket, ERROR_CODES.banned);
 
     const sessionId = allocSessionId();
