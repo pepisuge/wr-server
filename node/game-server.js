@@ -4,6 +4,7 @@ const config = require('./lib/config');
 const { createPool } = require('./lib/db');
 const { wrapSocket, sendGreeting, admitConnection, MAX_PACKETS_PER_SEC } = require('./lib/xor-socket');
 const { PORTS, XOR } = require('./lib/constants');
+const { DEBUG } = require('./lib/log');
 const { connectToAuthServer } = require('./game/internal-client');
 const { createHandlers } = require('./game/handlers');
 const { handleUdpPacket, startUdpKeepalive } = require('./game/udp-handlers');
@@ -17,7 +18,7 @@ const { setAuthDb } = require('./game/gm');
 const { setAuthDb: setShopAuthDb } = require('./game/shop');
 
 function logPacket(label, pkt) {
-  console.log(`${label} tick=${pkt.tick} id=${pkt.id} blocks=[${pkt.blocks.join(', ')}]`);
+  if (DEBUG) console.log(`${label} tick=${pkt.tick} id=${pkt.id} blocks=[${pkt.blocks.join(', ')}]`);
 }
 
 async function main() {

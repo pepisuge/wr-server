@@ -4,6 +4,7 @@
 // natively, no manual byte-reversal needed like the C# does.
 const { users, getChannel } = require('./state');
 const { recordFrame, frameStruct } = require('./record');
+const { DEBUG } = require('../lib/log');
 
 const INITIAL = 0x1001;
 const PING = 0x1010; // also the envelope for the "tunnel" (relay) sub-packets below
@@ -22,6 +23,7 @@ const TUNNEL_SUBCOMMANDS = new Set([0x10, 0x30, 0x31, 0x32, 0x34]);
 // across samples, without flooding the console every single frame.
 const seenShapes = new Map();
 function logTunnelSample(msg) {
+  if (!DEBUG) return;
   const key = `${msg[14]}:${msg.length}`;
   const count = (seenShapes.get(key) || 0) + 1;
   seenShapes.set(key, count);
@@ -75,7 +77,7 @@ function handlePingHandshake(socket, msg, rinfo) {
   const localEndpoint = readEndpoint(msg, 32);
 
   const u = users.get(sessionId);
-  console.log(`[udp-handshake] session ${sessionId} on server port ${socket.address().port} from ${rinfo.address}:${rinfo.port} (client-reported local ${localEndpoint.ip}:${localEndpoint.port})`);
+  if (DEBUG) console.log(`[udp-handshake] session ${sessionId} on server port ${socket.address().port} from ${rinfo.address}:${rinfo.port} (client-reported local ${localEndpoint.ip}:${localEndpoint.port})`);
   if (u && tcpAddress(u) !== rinfo.address) {
     console.log(`[udp-handshake] session ${sessionId} refused: its TCP connection is from ${tcpAddress(u)}`);
     return;
@@ -170,6 +172,7 @@ function handleTunnel(socket, msg, rinfo) {
 const relayStats = new Map();
 let relayTimer = null;
 function countRelay(from, to, what) {
+  if (!DEBUG) return;
   const key = `${from}->${to} ${what}`;
   relayStats.set(key, (relayStats.get(key) || 0) + 1);
   if (relayTimer) return;
