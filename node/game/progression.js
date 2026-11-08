@@ -158,7 +158,9 @@ function applyMatchEnd(db, user, points = 0) {
     levelUp = { newLevel, xp: user.xp, bonusMoney };
   }
 
-  db.query('UPDATE user_details SET xp = ?, money = ? WHERE id = ?', [user.xp, user.money, user.id]).catch((err) =>
+  // Relative, not absolute: absolute writes issued in sequence can land out of order and overwrite a newer balance.
+  const moneyGained = moneyEarned + (levelUp ? levelUp.bonusMoney : 0);
+  db.query('UPDATE user_details SET xp = xp + ?, money = money + ? WHERE id = ?', [xpEarned, moneyGained, user.id]).catch((err) =>
     console.error('applyMatchEnd: failed to persist xp/money:', err.message)
   );
 

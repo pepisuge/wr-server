@@ -218,7 +218,7 @@ async function handleCreate(socket, db, payload) {
   u.clanRank = RANK.MASTER;
   clans.set(clanId, { id: clanId, name, master: u.id, members: 1, wins: 0, losses: 0, dateCreation, eslogan: null });
 
-  persist(db, 'UPDATE user_details SET money = ?, clanid = ?, clanrank = ? WHERE id = ?', [u.money, clanId, RANK.MASTER, u.id]);
+  persist(db, 'UPDATE user_details SET money = GREATEST(0, CAST(money AS SIGNED) - ?), clanid = ?, clanrank = ? WHERE id = ?', [CREATE_COST, clanId, RANK.MASTER, u.id]);
 
   sendReply(socket, SUB.CREATE, [1, clanId, 2, name, u.money]);
 }
