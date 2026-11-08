@@ -1,4 +1,5 @@
 const { xorBuffer, parsePacket, buildPacket } = require('./packet');
+const { DEBUG } = require('./log');
 
 const MAX_LINE = 64 * 1024;
 // Client-facing limits (not the internal Auth<->Game channel). Real clients peak at ~5 packets/s per connection.
@@ -60,7 +61,7 @@ function wrapSocket(socket, keys, onPacket, maxPacketsPerSec = Infinity) {
   });
 
   socket.sendPacket = (id, fields) => {
-    console.log(`OUT id=${id} fields=[${fields.join(', ')}]`);
+    if (DEBUG) console.log(`OUT id=${id} fields=[${fields.join(', ')}]`);
     socket.write(xorBuffer(buildPacket(id, fields), keys.send));
   };
 }
@@ -77,7 +78,7 @@ function sendGreeting(socket) {
 // Same as socket.sendPacket, but for pushing the same packet to several
 // sockets at once (room updates, chat) - built once, written many times.
 function broadcastPacket(sockets, keys, id, fields) {
-  console.log(`OUT(broadcast x${sockets.length}) id=${id} fields=[${fields.join(', ')}]`);
+  if (DEBUG) console.log(`OUT(broadcast x${sockets.length}) id=${id} fields=[${fields.join(', ')}]`);
   const buf = xorBuffer(buildPacket(id, fields), keys.send);
   for (const s of sockets) s.write(buf);
 }

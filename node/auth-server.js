@@ -3,11 +3,13 @@ const config = require('./lib/config');
 const { createPool } = require('./lib/db');
 const { wrapSocket, sendGreeting, admitConnection, MAX_PACKETS_PER_SEC } = require('./lib/xor-socket');
 const { PORTS, XOR } = require('./lib/constants');
+const { DEBUG } = require('./lib/log');
 const { createHandlers } = require('./auth/handlers');
 const internalHandlers = require('./auth/internal-handlers');
 
 // blocks[3] of a login (0x1100) is the plaintext password: never write it to the log.
 function logPacket(label, pkt) {
+  if (!DEBUG) return;
   const blocks = pkt.id === 0x1100 ? pkt.blocks.map((b, i) => (i === 3 ? '***' : b)) : pkt.blocks;
   console.log(`${label} tick=${pkt.tick} id=${pkt.id} blocks=[${blocks.join(', ')}]`);
 }
