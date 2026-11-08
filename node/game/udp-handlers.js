@@ -62,12 +62,24 @@ function handleInitial(socket, msg, rinfo, port) {
 // can differ behind NAT) so the client learns its real public address. This
 // is also our only chance to learn the player's public UDP endpoint, needed
 // below to relay movement/shooting packets to them later.
+// The session id in a datagram is the sender's word. A player's UDP comes from the same IP as its TCP connection (NAT
+// included; the source port may change between handshakes), so a handshake from any other IP is someone trying to take
+// over that player's relay endpoint.
+function tcpAddress(u) {
+  const a = u.socket.remoteAddress || '';
+  return a.startsWith('::ffff:') ? a.slice(7) : a;
+}
+
 function handlePingHandshake(socket, msg, rinfo) {
   const sessionId = msg.readUInt16BE(4);
   const localEndpoint = readEndpoint(msg, 32);
 
   const u = users.get(sessionId);
-  console.log(`[udp-handshake] session ${sessionId} on server port ${socket.address().port} from ${rinfo.address}:${rinfo.port} (client-reported local ${readEndpoint(msg, 32).ip}:${readEndpoint(msg, 32).port})`);
+  console.log(`[udp-handshake] session ${sessionId} on server port ${socket.address().port} from ${rinfo.address}:${rinfo.port} (client-reported local ${localEndpoint.ip}:${localEndpoint.port})`);
+  if (u && tcpAddress(u) !== rinfo.address) {
+    console.log(`[udp-handshake] session ${sessionId} refused: its TCP connection is from ${tcpAddress(u)}`);
+    return;
+  }
 
   const response = Buffer.alloc(65);
   msg.copy(response, 0, 0, Math.min(msg.length, 65));
@@ -122,7 +134,6 @@ function dumpPacket(msg) {
 
 function handleTunnel(socket, msg, rinfo) {
   dumpPacket(msg);
-  if (msg[14] === 0x31) recordFrame(msg);
   logTunnelSample(msg);
   const via = `${socket.address().port}<-${rinfo.address}:${rinfo.port}`; // local server port <- peer's source address (compare with its handshake endpoint)
 
@@ -132,13 +143,17 @@ function handleTunnel(socket, msg, rinfo) {
 
   const sender = users.get(sessionId);
   const target = users.get(targetId);
-  // Last known position, for gamesubs.js's melee range check. ponytail: the sender session is not authenticated yet
-  // (UDP endpoint advisory), so a spoofer could move someone's recorded position; fix together with that.
-  if (msg[14] === 0x31 && sender?.roomId === roomId) {
-    const s = frameStruct(msg);
+  if (!sender || !target || sender.roomId !== roomId || target.roomId !== roomId) return countRelay(sessionId, targetId, `drop:no-sender/target/room via ${via}`);
+  // Only from the endpoint this session handshook from (real clients and the bot always do): stops frames injected as
+  // another player, and keeps their recorded position honest.
+  const from = sender.udpEndpoint;
+  if (!from || from.address !== rinfo.address || from.port !== rinfo.port) return countRelay(sessionId, targetId, `drop:wrong-source via ${via}`);
+
+  if (msg[14] === 0x31) {
+    recordFrame(msg);
+    const s = frameStruct(msg); // last known position, for gamesubs.js's knife range check
     if (s) sender.pos = { x: s.readFloatLE(28), h: s.readFloatLE(32), z: s.readFloatLE(36), t: Date.now() };
   }
-  if (!sender || !target || sender.roomId !== roomId || target.roomId !== roomId) return countRelay(sessionId, targetId, `drop:no-sender/target/room via ${via}`);
 
   const room = getChannel(sender.channel).rooms.get(roomId);
   if (!room || room.state !== 2) return countRelay(sessionId, targetId, 'drop:not-playing'); // Playing
@@ -161,7 +176,7 @@ function countRelay(from, to, what) {
   relayTimer = setInterval(() => {
     if (relayStats.size) console.log(`[udp-relay/5s] ${[...relayStats].map(([k, n]) => `${k} x${n}`).join(' | ')}`);
     relayStats.clear();
-  }, 5000);
+  }, 5000).unref(); // logging only: must not keep a process (e.g. a test) alive
 }
 
 // Never throws: a throw in a dgram listener is an uncaught exception, and one 1-byte datagram used to kill the server.
