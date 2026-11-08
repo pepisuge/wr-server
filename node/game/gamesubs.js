@@ -464,6 +464,30 @@ const HITBOX_MULTIPLIER = {
 const FALLBACK_POWER = 25; // unknown/uncatalogued weapon code - old flat baseline
 const NO_HEADSHOT_WEAPON = /^(DA|DJ|DK)/; // knives, rockets - never credited as a headshot
 
+// The client decides what it hit and with what, so check what we can (docs/protocol/match.md, "Hit validation"):
+// the weapon must be in the attacker's loadout for the class it spawned as; at most MAX_HITS_PER_SEC hits (no fire-rate
+// data in the DB; fastest real gun seen ~1 hit/85 ms, shotgun pellets arrive together); a knife hit needs both players
+// close, using their last 0x31 positions (skipped when either is missing or stale).
+const MAX_HITS_PER_SEC = 20;
+// World units. Frame positions lag what the client draws: real knife hits on a moving bot were recorded up to 860 apart
+// (maps span ~20000), so this only stops a knife from across the map.
+const MELEE_RANGE = 1500;
+const POS_MAX_AGE_MS = 1000;
+
+function rejectHit(player, u, weapon, victim, now = Date.now()) {
+  if (!u.equipment?.[player.class]?.includes(weapon)) return 'weapon not in loadout';
+  player.hitTimes = (player.hitTimes ?? []).filter((t) => now - t < 1000);
+  if (player.hitTimes.length >= MAX_HITS_PER_SEC) return 'hit rate';
+  player.hitTimes.push(now);
+  if (weapon.startsWith('DA')) {
+    const a = u.pos;
+    const b = users.get(victim.sessionId)?.pos;
+    const fresh = a && b && now - a.t < POS_MAX_AGE_MS && now - b.t < POS_MAX_AGE_MS;
+    if (fresh && Math.hypot(a.x - b.x, a.h - b.h, a.z - b.z) > MELEE_RANGE) return 'melee out of range';
+  }
+  return null;
+}
+
 function handlePlayerDamage(room, player, payload, u, db) {
   if (room.state !== 2 || payload.length !== 23 || Number(payload[2]) !== 1) return null;
 
@@ -478,13 +502,19 @@ function handlePlayerDamage(room, player, payload, u, db) {
   const friendlyFire = room.mode !== FFA_MODE && sameTeam && room.friendlyFire;
   if (room.mode !== FFA_MODE && sameTeam && !room.friendlyFire) return null;
 
+  const weapon = String(payload[22] || '').toUpperCase();
+  const rejected = rejectHit(player, u, weapon, victim);
+  if (rejected) {
+    console.log(`[anticheat] hit dropped: slot ${player.slot} (${u.displayname}) -> ${victim.slot}, ${weapon}: ${rejected}`);
+    return null;
+  }
+
   // boneId (payload[11], = blocks[15]) - sessionId: matches the reference's
   // Hitbox enum (1237 head, 1239 torso/limbs, 1241 lower limbs, 1243 sniper
   // bone) - confirmed against real captures (guide Fase 24: 1237/1241 for
   // "head" hits, 1239 for a "body" hit) and independently against
   // WarRock-ToXiiC-Core's Damage.cs, which hardcodes the same three numbers.
   const hsCalc = Number(payload[11]) - u.sessionId;
-  const weapon = String(payload[22] || '');
   const headshot = hsCalc === 1237 && !NO_HEADSHOT_WEAPON.test(weapon);
   const basePower = getItem(weapon)?.power || FALLBACK_POWER;
   const falloff = PERSONAL_FALLOFF[weapon] ?? 1;

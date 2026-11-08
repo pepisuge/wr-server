@@ -12,9 +12,14 @@ function record(o) {
 }
 
 // `msg` = a whole relayed tunnel datagram (29-byte header + body, XOR 0xc3 on the body); body[0] is the length's high byte.
+// Returns the decrypted 0x60-byte struct, or null when the datagram is too short.
+function frameStruct(msg) {
+  return msg.length < 29 + 97 ? null : Buffer.from(msg.subarray(30, 29 + 97)).map((x) => x ^ 0xc3);
+}
+
 function recordFrame(msg) {
-  if (!FILE || msg.length < 29 + 97) return;
-  const s = Buffer.from(msg.subarray(30, 29 + 97)).map((x) => x ^ 0xc3);
+  const s = FILE && frameStruct(msg);
+  if (!s) return;
   record({
     e: 'frame',
     slot: s.readUInt16LE(0),
@@ -25,4 +30,4 @@ function recordFrame(msg) {
   });
 }
 
-module.exports = { record, recordFrame };
+module.exports = { record, recordFrame, frameStruct };

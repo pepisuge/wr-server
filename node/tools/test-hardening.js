@@ -38,6 +38,44 @@ const good = Object.assign(new EventEmitter(), { replies: [], end() {}, sendPack
 internalHandlers[0x1000](good, { blocks: ['1', config.game.serverKey, 'Spain ', '127.0.0.1', '5340', '0'] });
 assert.strictEqual(good.replies[0][1][0], 1);
 
+// PlayerDamage: weapon must be in the loadout, hits are rate-capped, knife needs range
+const { HANDLERS, SUB } = require('../game/gamesubs');
+const { users } = require('../game/state');
+{
+  const loadout = ['DA02', 'DB01', 'DF01', 'DR01', '^', '^', '^', '^'];
+  const attackerUser = { sessionId: 100, displayname: 'A', equipment: [loadout, loadout, loadout, loadout, loadout], kills: 0, deaths: 0 };
+  const victimUser = { sessionId: 101, displayname: 'V', kills: 0, deaths: 0 };
+  users.set(100, attackerUser);
+  users.set(101, victimUser);
+  const mk = (slot, team, sessionId) => ({ slot, team, sessionId, class: 0, health: 1000, alive: true, kills: 0, deaths: 0, userId: sessionId });
+  const room = { state: 2, mode: 2, friendlyFire: false, tickets: [30, 30], players: new Map() };
+  const att = mk(0, 0, 100);
+  const vic = mk(1, 1, 101);
+  room.players.set(100, att).set(101, vic);
+  const hit = (weapon) => {
+    const p = Array(23).fill(0);
+    p[2] = 1; p[3] = 1; p[11] = 100 + 1239; p[22] = weapon;
+    vic.health = 1000; vic.alive = true;
+    return HANDLERS[SUB.PLAYER_DAMAGE](room, att, p, attackerUser, { query: async () => [] });
+  };
+  assert.ok(hit('DF01'), 'own weapon');
+  assert.strictEqual(hit('DL01'), null, 'rocket not in the loadout');
+  att.hitTimes = [];
+  for (let i = 0; i < 20; i++) hit('DF01');
+  assert.strictEqual(hit('DF01'), null, '21st hit within a second');
+  att.hitTimes = [];
+  attackerUser.pos = { x: 0, h: 0, z: 0, t: Date.now() };
+  victimUser.pos = { x: 5000, h: 0, z: 0, t: Date.now() };
+  assert.strictEqual(hit('DA02'), null, 'knife across the map');
+  victimUser.pos = { x: 60, h: 0, z: 0, t: Date.now() };
+  assert.ok(hit('DA02'), 'knife in range');
+  victimUser.pos.t -= 5000;
+  victimUser.pos.x = 5000;
+  assert.ok(hit('DA02'), 'stale position: not judged');
+  users.delete(100);
+  users.delete(101);
+}
+
 // Login throttle: 5 failures from one IP lock it out, even with the right password afterwards
 (async () => {
   const crypto = require('crypto');
