@@ -6,8 +6,10 @@ const { PORTS, XOR } = require('./lib/constants');
 const { createHandlers } = require('./auth/handlers');
 const internalHandlers = require('./auth/internal-handlers');
 
+// blocks[3] of a login (0x1100) is the plaintext password: never write it to the log.
 function logPacket(label, pkt) {
-  console.log(`${label} tick=${pkt.tick} id=${pkt.id} blocks=[${pkt.blocks.join(', ')}]`);
+  const blocks = pkt.id === 0x1100 ? pkt.blocks.map((b, i) => (i === 3 ? '***' : b)) : pkt.blocks;
+  console.log(`${label} tick=${pkt.tick} id=${pkt.id} blocks=[${blocks.join(', ')}]`);
 }
 
 function startListener(port, keys, label, handlers = {}) {

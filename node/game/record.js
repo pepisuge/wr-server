@@ -2,7 +2,7 @@
 //   {t, e:'frame', slot, x, h, z, yaw, pitch, mv:[fwd,back,right,left], st, crouch, fire:[b24,b26], hp, ammo}  every 0x31 movement frame
 //   {t, e:'hit',   from, to, bone, weapon, dmg, hs, hp}   a damage packet the server accepted (hp = victim's health after)
 //   {t, e:'spawn', slot}
-// Frame layout = PIANO-new-client.md section L (decoded from real client traffic).
+// Frame layout: docs/protocol/udp.md (decoded from real client traffic).
 const fs = require('fs');
 
 const FILE = process.env.WR_RECORD;

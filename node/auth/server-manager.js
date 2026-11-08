@@ -4,9 +4,9 @@
 const servers = new Map();
 let nextId = 1;
 
-function registerServer(name, ip, type) {
+function registerServer(name, ip, type, socket) {
   const id = nextId++;
-  servers.set(id, { id, name, ip, playerCount: 0, type });
+  servers.set(id, { id, name, ip, playerCount: 0, type, socket });
   return id;
 }
 

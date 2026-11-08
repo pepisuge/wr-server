@@ -4,6 +4,19 @@ const { PORTS, XOR } = require('../lib/constants');
 
 const CONNECTION = 0x1200; // greeting the Auth server sends right on accept
 const AUTHORIZATION = 0x1000;
+const PLAYER_AUTHORIZATION = 0x1300;
+// ponytail: kept (not single-use) so a client reconnecting to Game without a new login still works; concurrent use is
+// already blocked by the IdInUse check. Make it single-use once client 22's reconnect behaviour is known.
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+
+// sessionId -> { userId, username, displayname, at }: logins announced by Auth, checked by game/handlers.js.
+const pendingSessions = new Map();
+
+function findSession(sessionId, userId, username) {
+  const s = pendingSessions.get(sessionId);
+  if (!s || s.userId !== userId || s.username.toLowerCase() !== username.toLowerCase() || Date.now() - s.at > SESSION_TTL_MS) return null;
+  return s;
+}
 
 // Registers this Game server with the Auth server over the internal channel.
 // Ported from Game/Networking/ServerClient.cs + Game/Handlers/Internal/{Connection,Authorization}.cs:
@@ -18,6 +31,11 @@ function connectToAuthServer(config) {
 
     if (pkt.id === CONNECTION) {
       socket.sendPacket(AUTHORIZATION, [1, config.serverKey, `${config.serverName} `, config.serverIp, PORTS.game, Number(process.env.WR_SERVER_TYPE) || 0]); // WR_SERVER_TYPE=65..70: client 22 "A..F" channel UI (test)
+    } else if (pkt.id === PLAYER_AUTHORIZATION) {
+      const [sessionId, userId, username, displayname] = pkt.blocks;
+      const now = Date.now();
+      for (const [id, s] of pendingSessions) if (now - s.at > SESSION_TTL_MS) pendingSessions.delete(id);
+      pendingSessions.set(Number(sessionId), { userId: Number(userId), username, displayname, at: now });
     } else if (pkt.id === AUTHORIZATION) {
       const [errorCode, serverId] = pkt.blocks;
       if (Number(errorCode) === 1) {
@@ -37,4 +55,4 @@ function connectToAuthServer(config) {
   return socket;
 }
 
-module.exports = { connectToAuthServer };
+module.exports = { connectToAuthServer, findSession, pendingSessions };

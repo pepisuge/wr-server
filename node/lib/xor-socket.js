@@ -1,5 +1,7 @@
 const { xorBuffer, parsePacket, buildPacket } = require('./packet');
 
+const MAX_LINE = 64 * 1024;
+
 // Wraps a TCP socket: decrypts incoming bytes, splits them into lines (0x0A),
 // and calls onPacket for each complete packet. Adds socket.sendPacket() for
 // encoding + XOR-encrypting an outgoing packet.
@@ -15,6 +17,8 @@ function wrapSocket(socket, keys, onPacket) {
       buffer = buffer.subarray(newlineIndex + 1);
       if (line.length > 1) onPacket(parsePacket(line));
     }
+    // A peer that never sends a newline would grow this forever; real packets are a few KB at most.
+    if (buffer.length > MAX_LINE) socket.destroy();
   });
 
   socket.sendPacket = (id, fields) => {
