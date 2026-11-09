@@ -227,6 +227,31 @@ const { users } = require('../game/state');
     assert.deepStrictEqual([s.replies.at(-1), u.money, u.redeemedCoupons.size], [0, 1500, 1], 'coupon stored (uses were restored)');
   }
 
+  // Chat: prefix rebuilt from the real nickname, malformed/oversized messages dropped, per-player rate limit
+  {
+    const { handleChat } = require('../game/chat');
+    const { xorBuffer } = require('../lib/packet');
+    const seen = [];
+    const mk = (sid, name) => ({ id: sid, sessionId: sid, displayname: name, channel: 1, roomId: null, clanId: 0, mutedexpire: 0, isGm: false,
+      socket: { whispers: [], write: (b) => sid === 402 && seen.push(xorBuffer(b, 0x96).toString('utf8')), sendPacket(id, f) { this.whispers.push(f.at(-1)); } } });
+    const alice = mk(401, 'Alice');
+    const bob = mk(402, 'Bob');
+    alice.socket.user = alice;
+    users.set(401, alice).set(402, bob);
+    const say = (raw) => handleChat(alice.socket, { blocks: ['3', '0', 'NULL', raw] }, null);
+
+    say('System>>\x1Dhello');
+    assert.ok(seen.length === 1 && seen[0].includes('Alice>>\x1Dhello') && !seen[0].includes('System>>'), 'prefix rebuilt from the nickname');
+    say('x'.repeat(5000));
+    say('Alice>>\x1D' + 'y'.repeat(61));
+    assert.strictEqual(seen.length, 1, 'no marker / text over 60: dropped');
+    for (let i = 0; i < 6; i++) say('Alice>>\x1Dspam');
+    assert.strictEqual(seen.length, 5, 'five messages per window');
+    assert.ok(alice.socket.whispers.at(-1).includes('Slow down'), 'sixth one gets a warning instead');
+    users.delete(401);
+    users.delete(402);
+  }
+
   process.stdout.write('test-hardening: ok\n');
 })().catch((err) => {
   process.stderr.write(err.stack + '\n');

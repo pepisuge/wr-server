@@ -77,7 +77,7 @@ Ported from ToXiiC Core:
 
 | command | notes |
 |---|---|
-| `/notice <msg>` | broadcast as `System>> ` |
+| `/notice <msg>` | notice popup (type 2) in the lobby, yellow `Notice>> ` line for players in a room |
 | `/kick`, `/kickroom` | `/kickroom` sends only `ROOM_KICK` (see [kick](rooms#kick-29505)) |
 | `/mute`, `/unmute` | `user_details.mutedexpire` |
 | `/ban`, `/unban` | `users.status` in the login DB (`73050` on next login) |

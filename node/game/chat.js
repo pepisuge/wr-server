@@ -15,6 +15,15 @@ const TYPE = {
   CLAN: 10,
 };
 
+// Client 22 (decompiled 0x7400 handler) prints the message field as-is, "Name>> " prefix included, and colours a
+// room line by targetId: 999 yellow (system), 997/998 light blue (used here for GMs), anything else white.
+const SYSTEM_TARGET = 999;
+const GM_TARGET = 998;
+const MAX_TEXT = 60; // the client caps typed input at 55
+const MAX_NAME = 16; // users.displayname is varchar(16)
+const CHAT_BURST = 5; // messages per CHAT_WINDOW_MS, per player
+const CHAT_WINDOW_MS = 5000;
+
 function broadcast(sockets, fields) {
   if (sockets.length) broadcastPacket(sockets, XOR.external, CHAT, fields);
 }
@@ -40,10 +49,11 @@ function handleChat(socket, pkt, db) {
   const type = Number(pkt.blocks[0]);
   const targetId = Number(pkt.blocks[1]);
   const targetName = pkt.blocks[2] || '';
-  const message = pkt.blocks[3] || '';
-  const text = extractText(message);
-
-  if (text.startsWith('/cris') || text.length > 60) return;
+  const raw = pkt.blocks[3] || '';
+  // Every field here is the sender's word. No ">>" marker, an over-long text or target name: not a real client.
+  if (!raw.includes('>>\x1D') || targetName.length > MAX_NAME) return;
+  const text = extractText(raw);
+  if (!text || text.length > MAX_TEXT || text.startsWith('/cris')) return;
 
   // GM commands: only for is_gm accounts, so a non-GM typing "/whatever"
   // just sends it as ordinary chat text instead of being silently eaten.
@@ -58,6 +68,13 @@ function handleChat(socket, pkt, db) {
     return;
   }
 
+  const now = Date.now();
+  u.chatTimes = (u.chatTimes ?? []).filter((t) => now - t < CHAT_WINDOW_MS);
+  if (u.chatTimes.length >= CHAT_BURST) return sendSystemWhisper(socket, 'Slow down: too many messages.');
+  u.chatTimes.push(now);
+
+  // The prefix is rebuilt from the real nickname, so nobody can post as "System", a GM or another player.
+  const message = `${u.displayname}>> ${text}`;
   const fields = [1, u.sessionId, u.displayname, type, targetId, targetName, message];
 
   switch (type) {
@@ -75,8 +92,8 @@ function handleChat(socket, pkt, db) {
       if (u.roomId === null) return socket.end();
       const room = getChannel(u.channel).rooms.get(u.roomId);
       if (!room) return;
-      const sockets = roomSockets(room);
-      broadcast(sockets, fields);
+      if (u.isGm) fields[4] = GM_TARGET; // light blue for staff (outside a match; in-game lines use team colours)
+      broadcast(roomSockets(room), fields);
       break;
     }
     case TYPE.WHISPER: {
@@ -111,7 +128,15 @@ function handleChat(socket, pkt, db) {
 // hurt and matches the same "name>> text" shape every other message uses.
 function broadcastSystemMessage(room, text) {
   const sockets = roomSockets(room);
-  broadcast(sockets, [1, 0, 'System', TYPE.ROOM_TO_ALL, 999, 'NULL', `System>> ${text}`]);
+  broadcast(sockets, [1, 0, 'System', TYPE.ROOM_TO_ALL, SYSTEM_TARGET, 'NULL', `System>> ${text}`]);
+}
+
+// Server-wide notice. In the lobby the client shows type 1/2 as a notice popup (reference: Notice2, ">>" + text,
+// sent to lobbies only); players inside a room don't get that window, so they get a yellow system line instead.
+function sendNotice(text) {
+  const all = [...users.values()];
+  broadcast(all.filter((x) => x.roomId === null).map((x) => x.socket), [1, 0, 'Notice', TYPE.NOTICE2, SYSTEM_TARGET, 'NULL', `>> ${text}`]);
+  broadcast(all.filter((x) => x.roomId !== null).map((x) => x.socket), [1, 0, 'Notice', TYPE.ROOM_TO_ALL, SYSTEM_TARGET, 'NULL', `Notice>> ${text}`]);
 }
 
 // A server-authored whisper to just one socket - same wire shape as a real
@@ -131,4 +156,4 @@ function sendClanNotice(clanId, text) {
   broadcast(sockets, [1, 0, 'ClanSystem', TYPE.CLAN, clanId, 'NULL', `ClanSystem>> ${text}`]);
 }
 
-module.exports = { handleChat, CHAT, broadcastSystemMessage, sendSystemWhisper, sendClanNotice };
+module.exports = { handleChat, CHAT, broadcastSystemMessage, sendSystemWhisper, sendClanNotice, sendNotice };
