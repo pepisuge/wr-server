@@ -1,5 +1,6 @@
 const { broadcastPacket } = require('../lib/xor-socket');
 const { XOR } = require('../lib/constants');
+const { DEBUG } = require('../lib/log');
 const { getChannel, users, roomSockets } = require('./state');
 const { sendRoomUpdateToLobby, findFreeSlot } = require('./rooms');
 const { startRoundTimer, checkWinCondition, endRound, scoreboardValues } = require('./roundtimer');
@@ -8,7 +9,7 @@ const { initExplosiveMatch } = require('./explosive');
 const { broadcastSystemMessage } = require('./chat');
 const { getItem, codeById, DEFAULT_ITEMS } = require('./items');
 const { ownsItem } = require('./inventory');
-const { markSpawn } = require('./anticheat');
+const { markSpawn, strike } = require('./anticheat');
 const { record } = require('./record');
 
 const GAME_PACKET = 0x7530;
@@ -479,8 +480,23 @@ const MAX_HITS_PER_SEC = 20;
 const MELEE_RANGE = 1500;
 const POS_MAX_AGE_MS = 1000;
 
-function rejectHit(player, u, weapon, victim, now = Date.now()) {
+// OPK ("one position kill") cheats draw enemies where the cheater wants them and hit them there: the impact point the
+// client reports (payload[14..16]) is then far from where the victim itself says it is. Real hits land on the victim,
+// up to frame lag. ponytail: 1000 units until live data narrows it; (0,0,0) = no impact point (the test bot) is skipped,
+// tighten once the bot sends real ones.
+const OPK_RANGE = 1000;
+
+function rejectHit(player, u, weapon, victim, now = Date.now(), impact = null) {
   if (!u.equipment?.[player.class]?.includes(weapon)) return 'weapon not in loadout';
+  const vp = users.get(victim.sessionId)?.pos;
+  if (impact && (impact.x || impact.h || impact.z) && vp && now - vp.t < POS_MAX_AGE_MS) {
+    const off = Math.hypot(impact.x - vp.x, impact.h - vp.h, impact.z - vp.z);
+    if (DEBUG) console.log(`[anticheat] hit ${u.displayname} -> slot ${victim.slot}: impact ${Math.round(off)} units from the victim`);
+    if (off > OPK_RANGE) {
+      strike(u, 'opk', `hit ${Math.round(off)} units away from the victim`);
+      return 'impact far from the victim';
+    }
+  }
   player.hitTimes = (player.hitTimes ?? []).filter((t) => now - t < 1000);
   if (player.hitTimes.length >= MAX_HITS_PER_SEC) return 'hit rate';
   player.hitTimes.push(now);
@@ -508,7 +524,8 @@ function handlePlayerDamage(room, player, payload, u, db) {
   if (room.mode !== FFA_MODE && sameTeam && !room.friendlyFire) return null;
 
   const weapon = String(payload[22] || '').toUpperCase();
-  const rejected = rejectHit(player, u, weapon, victim);
+  const impact = { x: Number(payload[14]) || 0, h: Number(payload[15]) || 0, z: Number(payload[16]) || 0 };
+  const rejected = rejectHit(player, u, weapon, victim, Date.now(), impact);
   if (rejected) {
     console.log(`[anticheat] hit dropped: slot ${player.slot} (${u.displayname}) -> ${victim.slot}, ${weapon}: ${rejected}`);
     return null;

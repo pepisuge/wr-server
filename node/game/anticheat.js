@@ -6,6 +6,7 @@
 const MAX_SPEED = 440; // u/s over the window, horizontal (live 3x speedhack test: 450-480; honest play peaks ~390)
 const WINDOW_MS = 1000;
 const TELEPORT = 1500; // units between two samples less than a second apart
+const MAX_RISE = 350; // height gained within the window (recorded jumps, stairs and ramps: up to ~190)
 const MIN_SAMPLE_MS = 50; // the same frame reaches the server once per room peer: ignore copies
 const SPAWN_GRACE_MS = 3000; // respawns legitimately jump across the map
 const STRIKE_WINDOW_MS = 60000;
@@ -69,6 +70,11 @@ function checkMovement(u, pos, onStrike = strike) {
   }
   s.samples.push(pos);
   while (s.samples.length > 1 && pos.t - s.samples[0].t > WINDOW_MS) s.samples.shift();
+  const rise = pos.h - Math.min(...s.samples.map((p) => p.h));
+  if (rise > MAX_RISE) {
+    s.samples = [pos];
+    return onStrike(u, 'superjump', `${Math.round(rise)} units up in under a second`);
+  }
   const first = s.samples[0];
   // Only once the window is (nearly) full: a single short gap says little about speed.
   if (pos.t - first.t < WINDOW_MS * 0.8) return null;
@@ -96,4 +102,4 @@ function strike(u, kind, detail) {
   return kind;
 }
 
-module.exports = { checkMovement, checkClock, markSpawn, MAX_SPEED, TELEPORT };
+module.exports = { checkMovement, checkClock, markSpawn, strike, MAX_SPEED, TELEPORT };

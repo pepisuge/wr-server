@@ -357,6 +357,31 @@ const { users } = require('../game/state');
     assert.deepStrictEqual(flags, [], 'normal clock, one late reply');
     pings({}, [...Array(5).fill(5000), ...Array(4).fill(10200)]);
     assert.ok(flags.length && flags.every((k) => k === 'speed'), '2x clock');
+
+    // superjump: 800 units up in one frame, while a normal 60-unit jump passes
+    flags.length = 0;
+    const hopper = { channel: 1 };
+    [0, 60, 0].forEach((h, i) => checkMovement(hopper, { x: 0, h, z: 0, t: 300000 + i * 110 }, onStrike));
+    assert.deepStrictEqual(flags, [], 'normal jump');
+    checkMovement(hopper, { x: 0, h: 800, z: 0, t: 300440 }, onStrike);
+    assert.deepStrictEqual(flags, ['superjump'], 'superjump');
+  }
+
+  // OPK: a hit whose impact point is far from where the victim says it is gets dropped
+  {
+    const { HANDLERS, SUB } = require('../game/gamesubs');
+    const a = { id: 601, sessionId: 601, displayname: 'Opk', socket: { sendPacket() {}, destroy() {} }, equipment: { 3: ['DB01'] } };
+    const v = { id: 602, sessionId: 602, pos: { x: 5000, h: 0, z: 5000, t: Date.now() } };
+    a.socket.user = a;
+    users.set(601, a).set(602, v);
+    const victim = { sessionId: 602, slot: 4, team: 1, alive: true, health: 1000 };
+    const room = { state: 2, mode: 2, friendlyFire: false, players: new Map([[601, { slot: 0, team: 0, class: 3, alive: true }], [602, victim]]) };
+    const hit = (x, z) => HANDLERS[SUB.PLAYER_DAMAGE](room, room.players.get(601),
+      ['0', '1', '1', '4', '0', '1', '0', '4', '0', '0', '0', '1240', '0', '0', String(x), '20', String(z), '4', '0', '9', '5', '0', 'DB01'], a, null);
+    assert.strictEqual(hit(200, 300), null, 'impact 6000 units from the victim: dropped');
+    assert.strictEqual(victim.health, 1000);
+    users.delete(601);
+    users.delete(602);
   }
 
   process.stdout.write('test-hardening: ok\n');
