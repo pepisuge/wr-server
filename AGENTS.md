@@ -30,7 +30,7 @@ Private WarRock server in plain Node.js (CommonJS). Entry points: `node/auth-ser
 - A change verified only by tests, not against the real client, says so in the PR (`needs live test`).
 
 ## Run
-MariaDB on 127.0.0.1:3306 with `masterserver` and `wres2` (upstream dumps + `sql/03`…`10`), then `cd node && node auth-server.js` and `node game-server.js`.
+MariaDB on 127.0.0.1:3306 with `masterserver` and `wres2` (upstream dumps + `sql/03`…`11`), then `cd node && node auth-server.js` and `node game-server.js`.
 Or Docker: see `docker/` and the README. The upstream dumps `DROP` existing tables: never load them into a DB you care about.
 A real client needs `login.warrock.net` pointing at the server (hosts file).
 For protocol work start both servers with `LOG_LEVEL=debug` (every packet, UDP relay stats); the default log has no packet contents.

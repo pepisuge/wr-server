@@ -377,25 +377,6 @@ function nextSpawnSlot(room) {
   return room.spawnPoint;
 }
 
-// Investigation tools (gm.js's /spawnfields, /spawncycle) - both opt-in,
-// off by default, never touch a real match unless a GM explicitly sets
-// them. /spawnfields forces the whole 0-6 identity block; /spawncycle only
-// rotates idx2 (the one field confirmed to select the point) through a
-// GM-curated, already-verified-safe list, per team, leaving the player's
-// own real fields (class etc.) untouched. Neither ever invents a value on
-// its own - wrong ones have crashed the client outright or locked it in a
-// respawn loop, and which values are safe isn't stable session to session.
-function applySpawnTestOverrides(room, player, fields) {
-  if (room.spawnTestFields) {
-    for (let i = 0; i < 7; i++) fields[i] = room.spawnTestFields[i];
-    return;
-  }
-  const cycle = room.spawnCycle?.[player.team];
-  if (cycle) {
-    fields[2] = cycle.values[cycle.index % cycle.values.length];
-    cycle.index += 1;
-  }
-}
 
 // Ported from Game/Handlers/Game/Ingame/Spawn.cs. Skips any alive/dead/
 // CanSpawn state beyond what handlePlayerDamage already tracks - always
@@ -416,7 +397,6 @@ function handleSpawn(room, player, payload) {
   if (spawned) markSpawn(spawned);
   const out = padded(payload, 10);
   const slot = nextSpawnSlot(room);
-  applySpawnTestOverrides(room, player, out);
   out[7] = slot;
   out[8] = slot;
   out[9] = slot;
@@ -671,7 +651,6 @@ function scheduleAutoRespawn(room, player) {
     // synthetic all-zero payload was observed spawning team 1 players at
     // team 0's flag every time this timer fired.
     const payload = player.lastSpawnPayload ? [...player.lastSpawnPayload] : padded([], 10);
-    applySpawnTestOverrides(room, player, payload);
     payload[7] = slot;
     payload[8] = slot;
     payload[9] = slot;

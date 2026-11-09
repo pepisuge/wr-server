@@ -38,7 +38,7 @@ cd node && npm install
 node auth-server.js
 node game-server.js
 ```
-Without Docker: load `WarRock-Chapter-1-Server/Databases/*.SQL` (`git submodule update --init`), then `sql/03`…`10` into `wres2`, in order.
+Without Docker: load `WarRock-Chapter-1-Server/Databases/*.SQL` (`git submodule update --init`), then `sql/03`…`11` into `wres2`, in order.
 **Warning:** the upstream dumps contain `USE` + `DROP TABLE`, so they wipe an existing `masterserver`/`wres2`; back up first.
 
 With Docker (from the repo root, after `git submodule update --init` and `cp docker/.env.example docker/.env`):

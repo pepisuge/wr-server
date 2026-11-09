@@ -3,7 +3,7 @@
 // its in-memory state with the in-game clan packets. Put it behind an HTTPS reverse proxy when it faces the internet.
 const http = require('http');
 const crypto = require('crypto');
-const { hashPassword, newScryptSalt, sameHash } = require('../auth/handlers');
+const { hashPassword, newScryptSalt, sameHash, isBanned } = require('../auth/handlers');
 const clan = require('./clan');
 const { loadUserDetails } = require('./progression');
 const { webTokenUser } = require('./internal-client');
@@ -144,13 +144,13 @@ function loginPage(res, error) {
 async function login(req, res, authDb, ip) {
   const b = await readBody(req);
   if (tooMany('login', ip, 5, 5 * 60 * 1000)) return loginPage(res, 'Too many attempts, wait a few minutes.');
-  const [rows] = await authDb.query('SELECT id, status, displayname, password, passwordsalt FROM users WHERE username = ?', [b.get('username') || '']);
+  const [rows] = await authDb.query('SELECT id, status, displayname, password, passwordsalt, ban_until FROM users WHERE username = ?', [b.get('username') || '']);
   const user = rows[0];
   if (!user || !sameHash(await hashPassword(b.get('password') || '', user.passwordsalt), user.password)) {
     note('login', ip);
     return loginPage(res, 'Wrong username or password.');
   }
-  if (user.status <= 0) return loginPage(res, 'This account is banned.');
+  if (await isBanned(authDb, user)) return loginPage(res, 'This account is banned.');
   signIn(res, Number(user.id), b.get('username'), user.displayname);
 }
 

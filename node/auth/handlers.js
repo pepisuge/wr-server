@@ -52,6 +52,15 @@ function sameHash(a, b) {
   return x.length === 32 && y.length === 32 && crypto.timingSafeEqual(x, y);
 }
 
+// status <= 0 = banned. A temporary ban (GM /tempban) ends at the first login after ban_until (lifted here); a permanent
+// one has ban_until = 0. `user` needs id, status, ban_until. Shared with the website login.
+async function isBanned(db, user) {
+  if (user.status > 0) return false;
+  if (!(Number(user.ban_until) > 0 && Date.now() / 1000 >= Number(user.ban_until))) return true;
+  await db.query('UPDATE users SET status = 1, ban_until = 0 WHERE id = ?', [user.id]);
+  return false;
+}
+
 async function upgradeToScrypt(db, userId, password) {
   const salt = newScryptSalt();
   await db.query('UPDATE users SET password = ?, passwordsalt = ? WHERE id = ?', [await hashPassword(password, salt), salt, userId]);
@@ -126,7 +135,7 @@ function createHandlers(db) {
     if (isLockedOut(ip)) return sendLoginError(socket, ERROR_CODES.wrongPassword); // same answer as a wrong password
 
     const [rows] = await db.query(
-      'SELECT id, status, displayname, password, passwordsalt FROM users WHERE username = ?',
+      'SELECT id, status, displayname, password, passwordsalt, ban_until FROM users WHERE username = ?',
       [username]
     );
     if (rows.length === 0) {
@@ -143,7 +152,7 @@ function createHandlers(db) {
     if (!user.passwordsalt.startsWith('$')) {
       upgradeToScrypt(db, user.id, password).catch((err) => console.error('login: password hash upgrade failed:', err.message));
     }
-    if (user.status <= 0) return sendLoginError(socket, ERROR_CODES.banned);
+    if (await isBanned(db, user)) return sendLoginError(socket, ERROR_CODES.banned);
 
     const sessionId = allocSessionId();
     // Website single sign-on: a secret only this client gets. Client 22 stores the field it replaces ('NULL' upstream)
@@ -167,4 +176,4 @@ function createHandlers(db) {
   return { [LAUNCHER]: handleLauncher, [SERVER_LIST]: handlePlayerLogin };
 }
 
-module.exports = { createHandlers, hashPassword, newScryptSalt, sameHash };
+module.exports = { createHandlers, hashPassword, newScryptSalt, sameHash, isBanned };

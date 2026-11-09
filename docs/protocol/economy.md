@@ -81,11 +81,14 @@ Ported from ToXiiC Core:
 | `/kick`, `/kickroom` | `/kickroom` sends only `ROOM_KICK` (see [kick](rooms#kick-29505)) |
 | `/mute`, `/unmute` | `user_details.mutedexpire` |
 | `/ban`, `/unban` | `users.status` in the login DB (`73050` on next login) |
+| `/tempban <player\|id> <hours> [reason]` | new: `status = 0` plus `users.ban_until` (`sql/11`); the game and website logins lift it once that time has passed |
 | `/giveitem`, `/giveroom` | same insert as a real purchase |
-| `/userinfo`, `/roominfo`, `/online` | in-memory state |
-| `/closeroom`, `/maps`, `/map`, `/endgame`, `/extendtime` | room control |
+| `/userinfo`, `/roominfo`, `/online` | in-memory state (`/roominfo` shows the map name) |
+| `/closeroom`, `/start`, `/endgame`, `/extendtime` | room control |
 | `/setlevel`, `/addmoney`, `/setpremium <player\|id> <tier 0-4> <days>` | progression (`days=0` = no practical expiry) |
-| `/spawnfields`, `/spawncycle` | spawn debugging, opt-in |
 | `/warn` | new: a whisper to the target |
+| `/strikes <player>` | new: the player's last anticheat strikes this session (kind, detail, age); online GMs also get every strike as a whisper when it happens |
+
+Removed: `/map` and `/maps` (changed the map only server-side; the room master's own map selector works), `/spawnfields` and `/spawncycle` (spawn-point investigation tools, finished: see [match](match.md)).
 
 Every handler runs behind a guard in the dispatcher: a failing handler logs the error and affects only the offending connection, never the whole process. Money updates use `GREATEST(0, CAST(money AS SIGNED) + ?)` because the column is unsigned.

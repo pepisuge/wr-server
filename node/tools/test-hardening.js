@@ -406,6 +406,38 @@ const { users } = require('../game/state');
     users.delete(602);
   }
 
+  // Bans: a temporary one is lifted after ban_until, a running or permanent one holds
+  {
+    const { isBanned } = require('../auth/handlers');
+    const lifted = [];
+    const db = { query: async (sql, p) => (lifted.push(p[0]), [{}]) };
+    const now = Date.now() / 1000;
+    assert.strictEqual(await isBanned(db, { id: 1, status: 1, ban_until: 0 }), false, 'not banned');
+    assert.strictEqual(await isBanned(db, { id: 2, status: 0, ban_until: 0 }), true, 'permanent');
+    assert.strictEqual(await isBanned(db, { id: 3, status: 0, ban_until: now + 3600 }), true, 'tempban running');
+    assert.strictEqual(await isBanned(db, { id: 4, status: 0, ban_until: now - 1 }), false, 'tempban over');
+    assert.deepStrictEqual(lifted, [4], 'only the expired one is lifted');
+  }
+
+  // Anticheat strikes are kept for /strikes and whispered to online GMs
+  {
+    const { strike } = require('../game/anticheat');
+    const seen = [];
+    const mk = (sid, name, isGm) => {
+      const u = { id: sid, sessionId: sid, displayname: name, isGm, socket: { sendPacket: (id, f) => seen.push([name, f.at(-1)]), destroy() {} } };
+      u.socket.user = u;
+      return u;
+    };
+    const cheat = mk(701, 'Cheat', false);
+    const gm = mk(702, 'Boss', true);
+    users.set(701, cheat).set(702, gm);
+    strike(cheat, 'speed', 'client clock 2.00x');
+    assert.strictEqual(cheat.ac.history[0].kind, 'speed');
+    assert.ok(seen.some(([to, text]) => to === 'Boss' && text.includes('AC Cheat: speed')), 'GM alerted');
+    users.delete(701);
+    users.delete(702);
+  }
+
   process.stdout.write('test-hardening: ok\n');
 })().catch((err) => {
   process.stderr.write(err.stack + '\n');
