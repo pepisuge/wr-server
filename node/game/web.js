@@ -348,6 +348,14 @@ async function route(req, res, db, authDb) {
     if (!s) return redirect(res, '/login');
     return post ? clanAction(req, res, db, s) : clanPage(res, db, s);
   }
+  // Anticheat testing: the maintainer's test client asks whether its account may run cheat simulations, so those only
+  // ever switch on against a server that explicitly allows that account (WR_ANTICHEAT_TEST_USERS=name,name).
+  if (path === '/dev/anticheat-test' && !post) {
+    const allowed = (process.env.WR_ANTICHEAT_TEST_USERS || '').toLowerCase().split(',').filter(Boolean);
+    const user = webTokenUser(new URLSearchParams(req.url.split('?')[1] || '').get('t') || '');
+    res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
+    return res.end(user && allowed.includes(user.username.toLowerCase()) ? '1' : '0');
+  }
   if (path === '/clan/emblem' && post) {
     if (!s) return redirect(res, '/login');
     return uploadEmblem(req, res, db, s);

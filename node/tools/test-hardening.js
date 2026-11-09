@@ -322,6 +322,32 @@ const { users } = require('../game/state');
     assert.strictEqual(webTokenUser(b).userId, 1);
   }
 
+  // Movement anticheat: normal running passes, 2x speed and a teleport are flagged, respawns are not
+  {
+    const { checkMovement, markSpawn } = require('../game/anticheat');
+    const flags = [];
+    const onStrike = (u, kind) => (flags.push(kind), kind);
+    const run = (u, speed, from, ms = 3000) => {
+      for (let t = 0; t <= ms; t += 110) checkMovement(u, { x: from + (speed * t) / 1000, h: 0, z: 0, t: 100000 + t }, onStrike);
+    };
+    const honest = { channel: 1 };
+    run(honest, 340, 0);
+    assert.deepStrictEqual(flags, [], 'sprinting at 340 u/s is fine');
+    run({ channel: 1 }, 700, 0);
+    assert.ok(flags.includes('speed'), '700 u/s is a speedhack');
+    flags.length = 0;
+    const jumper = { channel: 1 };
+    checkMovement(jumper, { x: 0, h: 0, z: 0, t: 200000 }, onStrike);
+    checkMovement(jumper, { x: 4000, h: 0, z: 0, t: 200110 }, onStrike);
+    assert.deepStrictEqual(flags, ['teleport'], '4000 units in one frame');
+    flags.length = 0;
+    markSpawn(jumper); // respawn: the next big jump is legitimate
+    checkMovement(jumper, { x: 9000, h: 0, z: 0, t: Date.now() + 100 }, onStrike);
+    assert.deepStrictEqual(flags, [], 'no teleport right after a respawn');
+    run({ channel: 2 }, 900, 0);
+    assert.deepStrictEqual(flags, [], 'Urban Ops not checked (vehicles)');
+  }
+
   process.stdout.write('test-hardening: ok\n');
 })().catch((err) => {
   process.stderr.write(err.stack + '\n');

@@ -4,6 +4,7 @@
 // natively, no manual byte-reversal needed like the C# does.
 const { users, getChannel } = require('./state');
 const { recordFrame, frameStruct } = require('./record');
+const { checkMovement } = require('./anticheat');
 const { DEBUG } = require('../lib/log');
 
 const INITIAL = 0x1001;
@@ -154,7 +155,10 @@ function handleTunnel(socket, msg, rinfo) {
   if (msg[14] === 0x31) {
     recordFrame(msg);
     const s = frameStruct(msg); // last known position, for gamesubs.js's knife range check
-    if (s) sender.pos = { x: s.readFloatLE(28), h: s.readFloatLE(32), z: s.readFloatLE(36), t: Date.now() };
+    if (s) {
+      sender.pos = { x: s.readFloatLE(28), h: s.readFloatLE(32), z: s.readFloatLE(36), t: Date.now() };
+      checkMovement(sender, sender.pos);
+    }
   }
 
   const room = getChannel(sender.channel).rooms.get(roomId);

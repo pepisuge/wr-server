@@ -8,6 +8,7 @@ const { initExplosiveMatch } = require('./explosive');
 const { broadcastSystemMessage } = require('./chat');
 const { getItem, codeById, DEFAULT_ITEMS } = require('./items');
 const { ownsItem } = require('./inventory');
+const { markSpawn } = require('./anticheat');
 const { record } = require('./record');
 
 const GAME_PACKET = 0x7530;
@@ -410,6 +411,8 @@ function handleSpawn(room, player, payload) {
   // Engineer to everyone until they spawn once.
   player.class = Number(payload[3]) || 0;
   record({ e: 'spawn', slot: player.slot });
+  const spawned = users.get(player.sessionId);
+  if (spawned) markSpawn(spawned);
   const out = padded(payload, 10);
   const slot = nextSpawnSlot(room);
   applySpawnTestOverrides(room, player, out);
