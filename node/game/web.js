@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { hashPassword, newScryptSalt, sameHash } = require('../auth/handlers');
 const clan = require('./clan');
 const { loadUserDetails } = require('./progression');
+const { webTokenUser } = require('./internal-client');
 
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
 const MAX_BODY = 4096;
@@ -145,8 +146,12 @@ async function login(req, res, authDb, ip) {
     return loginPage(res, 'Wrong username or password.');
   }
   if (user.status <= 0) return loginPage(res, 'This account is banned.');
+  signIn(res, Number(user.id), b.get('username'), user.displayname);
+}
+
+function signIn(res, userId, username, displayname) {
   const token = crypto.randomBytes(32).toString('hex');
-  sessions.set(token, { userId: Number(user.id), username: b.get('username'), displayname: user.displayname, csrf: crypto.randomBytes(16).toString('hex'), expires: Date.now() + SESSION_TTL_MS });
+  sessions.set(token, { userId, username, displayname, csrf: crypto.randomBytes(16).toString('hex'), expires: Date.now() + SESSION_TTL_MS });
   redirect(res, '/clan', { 'Set-Cookie': `wr_s=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_MS / 1000}` });
 }
 
@@ -253,6 +258,13 @@ async function route(req, res, db, authDb) {
     return redirect(res, '/', { 'Set-Cookie': 'wr_s=; Path=/; Max-Age=0' });
   }
   if (path === '/clan') {
+    // Single sign-on from the game client (?t= token handed out at game login, see internal-client.js). Redirects to
+    // the bare URL so the token doesn't stay in the address bar or history.
+    const t = !post && new URLSearchParams(req.url.split('?')[1] || '').get('t');
+    if (t) {
+      const user = webTokenUser(t);
+      return user ? signIn(res, user.userId, user.username, user.displayname) : redirect(res, '/login');
+    }
     if (!s) return redirect(res, '/login');
     return post ? clanAction(req, res, db, s) : clanPage(res, db, s);
   }

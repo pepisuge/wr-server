@@ -273,6 +273,19 @@ const { users } = require('../game/state');
     clan.clans.delete(77);
   }
 
+  // Website sign-on tokens: well-formed only, one per account (a new login replaces the old one)
+  {
+    const { webTokenUser, addWebToken } = require('../game/internal-client');
+    const a = 'a'.repeat(32), b = 'b'.repeat(32);
+    addWebToken('NULL', { userId: 1 });
+    assert.strictEqual(webTokenUser('NULL'), null, 'malformed token ignored');
+    addWebToken(a, { userId: 1, username: 'u' });
+    assert.strictEqual(webTokenUser(a).userId, 1);
+    addWebToken(b, { userId: 1, username: 'u' });
+    assert.strictEqual(webTokenUser(a), null, 'old token gone after a new login');
+    assert.strictEqual(webTokenUser(b).userId, 1);
+  }
+
   process.stdout.write('test-hardening: ok\n');
 })().catch((err) => {
   process.stderr.write(err.stack + '\n');
