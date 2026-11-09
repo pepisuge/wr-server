@@ -82,4 +82,4 @@ function announceLeave() {
   scheduleFlush();
 }
 
-module.exports = { handleUserList, announceJoin, announceLeave, USER_LIST };
+module.exports = { handleUserList, announceJoin, announceLeave, refreshUserList: scheduleFlush, USER_LIST };

@@ -27,6 +27,12 @@ function chat() {
   return require('./chat');
 }
 
+// The lobby user list shows each player's clan and emblem; re-push it after a change (batched in userlist.js).
+// Lazy for the same reason as chat(): userlist.js requires this file.
+function listChanged() {
+  require('./userlist').refreshUserList();
+}
+
 const CLAN_SYSTEM = 0x6710;
 const CLAN_RANKING = 0x6760;
 
@@ -243,6 +249,7 @@ async function createClan(db, u, name) {
   clans.set(clanId, { id: clanId, name, master: u.id, members: 1, wins: 0, losses: 0, draws: 0, dateCreation, eslogan: null, emblem: null, emblemData: null });
 
   persist(db, 'UPDATE user_details SET money = GREATEST(0, CAST(money AS SIGNED) - ?), clanid = ?, clanrank = ? WHERE id = ?', [CREATE_COST, clanId, RANK.MASTER, u.id]);
+  listChanged();
 }
 
 async function handleCreate(socket, db, payload) {
@@ -283,6 +290,7 @@ function disbandClan(db, clan) {
 
   persist(db, 'UPDATE clan SET disbanded = 1 WHERE id = ?', [clan.id]);
   persist(db, 'UPDATE user_details SET clanid = 0, clanrank = 0 WHERE clanid = ?', [clan.id]);
+  listChanged();
 }
 
 // Subtype 3 - Game/Clan.cs:97-143.
@@ -309,6 +317,7 @@ function leaveClan(db, u) {
     persist(db, 'UPDATE clan SET members = ? WHERE id = ?', [clan.members, clan.id]);
   }
   persist(db, 'UPDATE user_details SET clanid = 0, clanrank = 0 WHERE id = ?', [u.id]);
+  listChanged();
 }
 
 function handleLeave(socket, db) {
@@ -454,6 +463,7 @@ async function joinAction(db, u, action, targetId) {
   } else {
     return 'Unknown action.';
   }
+  listChanged();
 }
 
 async function handleJoinAction(socket, db, payload) {
@@ -487,6 +497,7 @@ async function rankAction(db, u, action, targetId) {
   } else {
     return 'Unknown action.';
   }
+  listChanged();
 }
 
 async function handleRankAction(socket, db, payload) {
@@ -528,6 +539,7 @@ function setEmblem(db, u, emblem, data = null) {
   clan.emblem = emblem;
   clan.emblemData = data;
   persist(db, 'UPDATE clan SET emblem = ?, emblem_data = ? WHERE id = ?', [emblem, data, clan.id]);
+  listChanged();
 }
 
 // Clan war is self-designed (no captured client flow starts one): START_WAR (1000) is outside the real 0-17 subtypes.
