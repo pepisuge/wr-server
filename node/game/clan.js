@@ -158,6 +158,16 @@ async function resolveDisplaynames(ids) {
   return new Map(rows.map((r) => [r.id, r.displayname]));
 }
 
+// The acting/target player as clan actions see it: the live user if online (so memory stays in sync), else the DB row.
+// The website acts on offline players too, so targets are always checked against this, never trusted by id.
+async function memberOf(db, id) {
+  const live = [...users.values()].find((x) => x.id === id);
+  if (live) return live;
+  const [rows] = await db.query('SELECT id, money, clanid, clanrank FROM user_details WHERE id = ?', [id]);
+  const r = rows[0];
+  return r ? { id: r.id, money: Number(r.money), clanId: r.clanid, clanRank: r.clanrank } : null;
+}
+
 // Subtype 0 - Game/Clan.cs:46-54. Silently ignored below the length check,
 // matching the reference exactly (the client's own create-clan form enforces
 // this before letting the player submit).
@@ -198,16 +208,14 @@ function handleNickChange(socket, db, payload) {
 // file's old nextFreeClanId() scan, which reused ids off disbanded rows
 // (disbanded=1 rows are never deleted) and silently lost a clan to a
 // duplicate-key error on every restart after the first disband.
-async function handleCreate(socket, db, payload) {
-  const u = socket.user;
-  const name = (payload[0] || '').replace(/ /g, '');
-  if (!CLAN_NAME_RE.test(name)) return chat().sendSystemWhisper(socket, 'Clan names: 5-20 letters, digits, _ or -.');
-
-  if (u.clanId > 0) return chat().sendSystemWhisper(socket, 'Cannot create the clan because you are in a clan!');
+// Clan actions shared by the game packets and the website: each returns an error message, or nothing on success.
+async function createClan(db, u, name) {
+  if (!CLAN_NAME_RE.test(name)) return 'Clan names: 5-20 letters, digits, _ or -.';
+  if (u.clanId > 0) return 'Cannot create the clan because you are in a clan!';
   if ([...clans.values()].some((c) => c.name.toLowerCase() === name.toLowerCase())) {
-    return chat().sendSystemWhisper(socket, 'Cannot create the clan because this clan name is already in use!');
+    return 'Cannot create the clan because this clan name is already in use!';
   }
-  if (u.money < CREATE_COST) return chat().sendSystemWhisper(socket, `You havent enough dinars (${CREATE_COST} needed!)`);
+  if (u.money < CREATE_COST) return `You havent enough dinars (${CREATE_COST} needed!)`;
 
   const tag = name.slice(0, 4).toUpperCase(); // schema's `tag` is NOT NULL; the real protocol never transmits one
   const dateCreation = Math.floor(Date.now() / 1000);
@@ -223,25 +231,31 @@ async function handleCreate(socket, db, payload) {
   clans.set(clanId, { id: clanId, name, master: u.id, members: 1, wins: 0, losses: 0, dateCreation, eslogan: null });
 
   persist(db, 'UPDATE user_details SET money = GREATEST(0, CAST(money AS SIGNED) - ?), clanid = ?, clanrank = ? WHERE id = ?', [CREATE_COST, clanId, RANK.MASTER, u.id]);
+}
 
-  sendReply(socket, SUB.CREATE, [1, clanId, 2, name, u.money]);
+async function handleCreate(socket, db, payload) {
+  const u = socket.user;
+  const err = await createClan(db, u, (payload[0] || '').replace(/ /g, ''));
+  if (err) return chat().sendSystemWhisper(socket, err);
+  sendReply(socket, SUB.CREATE, [1, u.clanId, 2, clans.get(u.clanId).name, u.money]);
 }
 
 // Subtype 2 - Game/Clan.cs:64-96. Unlike this file's old JOIN, membership
 // isn't instant: the applicant is parked at clanrank=PENDING until a
 // master/officer accepts via JOIN_ACTION (subtype 9).
-async function handleApply(socket, db, payload) {
-  const u = socket.user;
-  const clanId = Number(payload[0]);
-  if (!(clanId > 0) || u.clanId > 0) return;
+function applyClan(db, u, clanId) {
+  if (u.clanId > 0) return 'You are already in a clan.';
   const clan = clans.get(clanId);
-  if (!clan || clan.members >= MAX_MEMBERS) return;
+  if (!clan) return 'Clan not found.';
+  if (clan.members >= MAX_MEMBERS) return 'The clan is full.';
 
   u.clanId = clanId;
   u.clanRank = RANK.PENDING;
   persist(db, 'UPDATE user_details SET clanid = ?, clanrank = ? WHERE id = ?', [clanId, RANK.PENDING, u.id]);
+}
 
-  sendReply(socket, SUB.APPLY, [1]);
+function handleApply(socket, db, payload) {
+  if (!applyClan(db, socket.user, Number(payload[0]))) sendReply(socket, SUB.APPLY, [1]);
 }
 
 // Shared by LEAVE-as-master and DISBAND. Notice must go out to members
@@ -260,10 +274,9 @@ function disbandClan(db, clan) {
 }
 
 // Subtype 3 - Game/Clan.cs:97-143.
-function handleLeave(socket, db) {
-  const u = socket.user;
+function leaveClan(db, u) {
   const clan = clans.get(u.clanId);
-  if (!clan) return;
+  if (!clan) return 'You are not in a clan.';
 
   if (u.clanRank === RANK.MASTER) {
     // Faithful to the reference: leaving as master silently disbands the
@@ -284,19 +297,26 @@ function handleLeave(socket, db) {
     persist(db, 'UPDATE clan SET members = ? WHERE id = ?', [clan.members, clan.id]);
   }
   persist(db, 'UPDATE user_details SET clanid = 0, clanrank = 0 WHERE id = ?', [u.id]);
+}
 
-  sendReply(socket, SUB.LEAVE, [1]);
+function handleLeave(socket, db) {
+  const wasMaster = socket.user.clanRank === RANK.MASTER;
+  if (!leaveClan(db, socket.user) && !wasMaster) sendReply(socket, SUB.LEAVE, [1]);
 }
 
 // Subtype 16 - Managers/ClanManager.cs:189-225.
-function handleDisband(socket, db) {
-  const u = socket.user;
+function disbandBy(db, u) {
   const clan = clans.get(u.clanId);
-  if (!clan) return;
-  if (u.clanRank !== RANK.MASTER) return chat().sendSystemWhisper(socket, "Cannot delete the clan because you're not the master!");
+  if (!clan) return 'You are not in a clan.';
+  if (u.clanRank !== RANK.MASTER) return "Cannot delete the clan because you're not the master!";
 
   chat().sendClanNotice(clan.id, `${u.displayname} disbanded the clan :(`);
   disbandClan(db, clan);
+}
+
+function handleDisband(socket, db) {
+  const err = disbandBy(db, socket.user);
+  if (err) return chat().sendSystemWhisper(socket, err);
   sendReply(socket, SUB.DISBAND, [1]);
 }
 
@@ -401,115 +421,90 @@ async function handleSearch(socket, db, payload) {
   sendReply(socket, SUB.SEARCH, fields);
 }
 
-// Subtype 9 - Game/Clan.cs:242-317, the Accept(0)/Refuse(1) branches.
-// Deviation from the reference: it never checks the target is actually a
-// pending applicant to THIS clan before mutating them - trusts the caller's
-// targetId completely, which lets any officer of any clan "refuse" (i.e.
-// blank out the clanid/clanrank of) an arbitrary account. Both the DB
-// update and the in-memory mutation below are scoped to a target that's
-// actually PENDING in this clan; an offline target still updates by id
-// alone (no online record to check against), same trust level the
-// reference has for that case.
-async function handleJoinAction(socket, db, payload) {
-  const u = socket.user;
+// Subtype 9 - Game/Clan.cs:242-317, Accept(0)/Refuse(1). The reference trusts targetId blindly; here the target
+// must be a pending applicant of this clan, online or not.
+async function joinAction(db, u, action, targetId) {
   const clan = clans.get(u.clanId);
-  if (!clan) return;
-  if (u.clanRank !== RANK.OFFICER && u.clanRank !== RANK.MASTER) return;
-
-  const action = Number(payload[0]);
-  const targetId = Number(payload[1]);
-  const target = [...users.values()].find((x) => x.id === targetId);
-  if (target && !(target.clanId === clan.id && target.clanRank === RANK.PENDING)) return;
+  if (!clan || (u.clanRank !== RANK.OFFICER && u.clanRank !== RANK.MASTER)) return 'Only the master or an officer can do this.';
+  const target = await memberOf(db, targetId);
+  if (!target || target.clanId !== clan.id || target.clanRank !== RANK.PENDING) return 'No such applicant.';
 
   if (action === 0) {
-    if (clan.members >= MAX_MEMBERS) {
-      return chat().sendSystemWhisper(socket, 'No more slot available for the clan, please expand if is possible');
-    }
+    if (clan.members >= MAX_MEMBERS) return 'No more slot available for the clan, please expand if is possible';
     clan.members++;
+    target.clanRank = RANK.MEMBER;
     persist(db, 'UPDATE clan SET members = ? WHERE id = ?', [clan.members, clan.id]);
     persist(db, 'UPDATE user_details SET clanrank = ? WHERE id = ? AND clanid = ? AND clanrank = ?', [RANK.MEMBER, targetId, clan.id, RANK.PENDING]);
-    if (target) target.clanRank = RANK.MEMBER;
   } else if (action === 1) {
+    target.clanId = 0;
+    target.clanRank = RANK.MEMBER;
     persist(db, 'UPDATE user_details SET clanid = 0, clanrank = 0 WHERE id = ? AND clanid = ? AND clanrank = ?', [targetId, clan.id, RANK.PENDING]);
-    if (target) {
-      target.clanId = 0;
-      target.clanRank = RANK.MEMBER;
-    }
   } else {
-    return;
+    return 'Unknown action.';
   }
+}
 
+async function handleJoinAction(socket, db, payload) {
+  const [action, targetId] = [Number(payload[0]), Number(payload[1])];
+  const err = await joinAction(db, socket.user, action, targetId);
+  if (err) return chat().sendSystemWhisper(socket, err);
   sendReply(socket, SUB.JOIN_ACTION, [action, targetId]);
 }
 
-// Subtype 10 - Game/Clan.cs:318-369. Promote-to-officer(0)/demote(1)/kick(2).
-// Ported as-is including the reference's own permission model (any officer
-// or master can act on any member, with no extra check that the target
-// isn't e.g. the master themselves) - except, like JOIN_ACTION above, both
-// the DB update and the in-memory mutation are scoped to a target that's
-// actually a member of THIS clan, which the reference never verifies.
-function handleRankAction(socket, db, payload) {
-  const u = socket.user;
+// Subtype 10 - Game/Clan.cs:318-369. Promote-to-officer(0)/demote(1)/kick(2). Unlike the reference, the target must be
+// a member or officer of this clan: the master can't be demoted or kicked (that left clans without a master).
+async function rankAction(db, u, action, targetId) {
   const clan = clans.get(u.clanId);
-  if (!clan) return;
-  if (u.clanRank !== RANK.OFFICER && u.clanRank !== RANK.MASTER) return;
-
-  const action = Number(payload[0]);
-  const targetId = Number(payload[1]);
-  const target = [...users.values()].find((x) => x.id === targetId);
-  if (target && target.clanId !== clan.id) return;
-
-  if (action === 0) {
-    persist(db, 'UPDATE user_details SET clanrank = ? WHERE id = ? AND clanid = ?', [RANK.OFFICER, targetId, clan.id]);
-    if (target) target.clanRank = RANK.OFFICER;
-  } else if (action === 1) {
-    persist(db, 'UPDATE user_details SET clanrank = ? WHERE id = ? AND clanid = ?', [RANK.MEMBER, targetId, clan.id]);
-    if (target) target.clanRank = RANK.MEMBER;
-  } else if (action === 2) {
-    clan.members--;
-    persist(db, 'UPDATE clan SET members = ? WHERE id = ?', [clan.members, clan.id]);
-    persist(db, 'UPDATE user_details SET clanid = 0, clanrank = 0 WHERE id = ? AND clanid = ?', [targetId, clan.id]);
-    if (target) {
-      target.clanId = 0;
-      target.clanRank = RANK.MEMBER;
-    }
-  } else {
-    return;
+  if (!clan || (u.clanRank !== RANK.OFFICER && u.clanRank !== RANK.MASTER)) return 'Only the master or an officer can do this.';
+  const target = await memberOf(db, targetId);
+  if (!target || target.clanId !== clan.id || (target.clanRank !== RANK.MEMBER && target.clanRank !== RANK.OFFICER)) {
+    return 'No such member.';
   }
 
+  if (action === 0 || action === 1) {
+    target.clanRank = action === 0 ? RANK.OFFICER : RANK.MEMBER;
+    persist(db, 'UPDATE user_details SET clanrank = ? WHERE id = ? AND clanid = ?', [target.clanRank, targetId, clan.id]);
+  } else if (action === 2) {
+    clan.members--;
+    target.clanId = 0;
+    target.clanRank = RANK.MEMBER;
+    persist(db, 'UPDATE clan SET members = ? WHERE id = ?', [clan.members, clan.id]);
+    persist(db, 'UPDATE user_details SET clanid = 0, clanrank = 0 WHERE id = ? AND clanid = ?', [targetId, clan.id]);
+  } else {
+    return 'Unknown action.';
+  }
+}
+
+async function handleRankAction(socket, db, payload) {
+  const [action, targetId] = [Number(payload[0]), Number(payload[1])];
+  const err = await rankAction(db, socket.user, action, targetId);
+  if (err) return chat().sendSystemWhisper(socket, err);
   sendReply(socket, SUB.RANK_ACTION, [action, targetId]);
 }
 
-// Subtype 11 - Game/Clan.cs:370-403, master hand-off.
-async function handlePromote(socket, db, payload) {
-  const u = socket.user;
+// Subtype 11 - Game/Clan.cs:370-403, master hand-off. The reference has no rank check at all; here only the master,
+// and only to a member/officer of the same clan.
+async function promote(db, u, targetId) {
   const clan = clans.get(u.clanId);
-  if (!clan) return;
-  // Deviation from the reference: Game/Clan.cs:370-403 has NO rank check at
-  // all here - any clan member could call this and reassign the clan's own
-  // master to anyone. Every sibling master-only action in this same file
-  // (LeaveClan-as-master, DisbandClan) requires clanRank==MASTER; treating
-  // the omission here as a reference bug rather than intended design, and
-  // requiring master rank like those do (see CLAUDE.md on prioritizing safe,
-  // correct code).
-  if (u.clanRank !== RANK.MASTER) return;
-
-  const targetId = Number(payload[0]);
-  if (targetId === u.id) return;
-  const target = [...users.values()].find((x) => x.id === targetId);
-  if (target && target.clanId !== clan.id) return;
+  if (!clan || u.clanRank !== RANK.MASTER) return 'Only the master can do this.';
+  const target = targetId === u.id ? null : await memberOf(db, targetId);
+  if (!target || target.clanId !== clan.id || (target.clanRank !== RANK.MEMBER && target.clanRank !== RANK.OFFICER)) {
+    return 'No such member.';
+  }
 
   clan.master = targetId;
   u.clanRank = RANK.MEMBER;
-  if (target) target.clanRank = RANK.MASTER;
-
+  target.clanRank = RANK.MASTER;
   persist(db, 'UPDATE clan SET master = ? WHERE id = ?', [targetId, clan.id]);
   persist(db, 'UPDATE user_details SET clanrank = ? WHERE id = ?', [RANK.MEMBER, u.id]);
   persist(db, 'UPDATE user_details SET clanrank = ? WHERE id = ? AND clanid = ?', [RANK.MASTER, targetId, clan.id]);
 
   const names = await resolveDisplaynames([targetId]);
   chat().sendClanNotice(clan.id, `${u.displayname} passed master to ${names.get(targetId) || '??'} :/`);
-  sendReply(socket, SUB.PROMOTE, [1]);
+}
+
+async function handlePromote(socket, db, payload) {
+  if (!(await promote(db, socket.user, Number(payload[0])))) sendReply(socket, SUB.PROMOTE, [1]);
 }
 
 // Clan war, still designed from scratch - see the guide: the reference has
@@ -575,4 +570,26 @@ function handleClanRanking(socket) {
   socket.sendPacket(CLAN_RANKING, fields);
 }
 
-module.exports = { CLAN_SYSTEM, CLAN_RANKING, SUB, RANK, loadClans, clanInfo, handleClanSystem, handleClanRanking, setAuthDb };
+module.exports = {
+  CLAN_SYSTEM,
+  CLAN_RANKING,
+  SUB,
+  RANK,
+  MAX_MEMBERS,
+  CREATE_COST,
+  clans,
+  memberOf,
+  resolveDisplaynames,
+  createClan,
+  applyClan,
+  leaveClan,
+  disbandBy,
+  joinAction,
+  rankAction,
+  promote,
+  loadClans,
+  clanInfo,
+  handleClanSystem,
+  handleClanRanking,
+  setAuthDb,
+};

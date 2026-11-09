@@ -17,6 +17,7 @@ const { loadCoupons } = require('./game/coupon');
 const { loadMaps } = require('./game/maps');
 const { setAuthDb } = require('./game/gm');
 const { setAuthDb: setShopAuthDb } = require('./game/shop');
+const { startWeb } = require('./game/web');
 
 function logPacket(label, pkt) {
   if (DEBUG) console.log(`${label} tick=${pkt.tick} id=${pkt.id} blocks=[${pkt.blocks.join(', ')}]`);
@@ -87,9 +88,13 @@ async function main() {
   connectToAuthServer(config.game);
   startPingLoop(db);
   startUdpKeepalive();
+  // Website (registration, clan management); WR_WEB_PORT=0 turns it off.
+  const webPort = Number(process.env.WR_WEB_PORT ?? 8080);
+  const web = webPort ? startWeb(db, authDb, webPort) : null;
 
   onShutdown('Game server', async () => {
     gameListener.close();
+    if (web) web.close();
     for (const udp of udpSockets) udp.close();
     // Each player's normal 'close' cleanup runs (room leave, match rewards), queuing its DB writes.
     for (const u of users.values()) u.socket.destroy();

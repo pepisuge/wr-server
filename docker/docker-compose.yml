@@ -17,6 +17,7 @@ services:
       - ../sql/06-weapons.sql:/docker-entrypoint-initdb.d/06-weapons.sql:ro
       - ../sql/07-activate-extra.sql:/docker-entrypoint-initdb.d/07-activate-extra.sql:ro
       - ../sql/08-server-extensions.sql:/docker-entrypoint-initdb.d/08-server-extensions.sql:ro
+      - ../sql/09-website.sql:/docker-entrypoint-initdb.d/09-website.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p\"$$MARIADB_ROOT_PASSWORD\" --silent"]
       interval: 5s
@@ -59,6 +60,7 @@ services:
       GAME_SERVER_IP: ${SERVER_IP:-127.0.0.1}
     ports:
       - "5340:5340"
+      - "8080:8080"
       - "5350:5350/udp"
       - "5351:5351/udp"
     depends_on:

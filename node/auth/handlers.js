@@ -164,4 +164,4 @@ function createHandlers(db) {
   return { [LAUNCHER]: handleLauncher, [SERVER_LIST]: handlePlayerLogin };
 }
 
-module.exports = { createHandlers, hashPassword };
+module.exports = { createHandlers, hashPassword, newScryptSalt, sameHash };
