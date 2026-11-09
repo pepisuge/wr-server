@@ -31,3 +31,7 @@ graphify-out/.graphify_root
 .claude/settings.local.json
 graphify-out/.graphify_build_state.json
 graphify-out/.graphify_labels*
+
+# Client mod build output (tools/client22-mod/build.py): publish the zip as a release asset, never commit it
+tools/client22-mod/dist/
+tools/client22-mod/*.zip

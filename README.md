@@ -68,6 +68,10 @@ Ports: 5330 (login) and 5340 (game) TCP, 5350-5351 UDP, 8080 website (HTTP). **N
 `cd node && node tools/test-hardening.js` (no DB). With the servers running: `node tools/smoke-login.js <user> <password>`
 and `node tools/test-gamesubs.js`. CI runs all of them (the last two against the Docker stack).
 
+## Client mod
+
+Players use the client 22 they already have plus [`tools/client22-mod`](tools/client22-mod/README.md): an installer that turns TRAINING into a CLAN button (the clan website in a game window, signed in from the game login), loads clan emblems from this server and points the client at it. Only our code and a checked recipe of changes are distributed, never game files.
+
 ## Contributing
 Humans and AI agents are welcome: read [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md). Use the issue templates for bugs and ideas.
 

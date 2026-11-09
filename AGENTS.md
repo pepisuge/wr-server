@@ -7,6 +7,7 @@ Private WarRock server in plain Node.js (CommonJS). Entry points: `node/auth-ser
 ## Layout
 - `node/lib/`: packet framing/XOR, DB pool, constants. `node/auth/`: login handlers.
 - `node/game/`: one module per area (`rooms`, `chat`, `clan`, `shop`, `inventory`, `items`, `progression`, `gm`, `coupon`, `gamesubs`, `udp-handlers`...).
+- `tools/client22-mod/`: client mod (proxy DLL source, build script, installer); build output is git-ignored, game files are never committed.
 - `sql/`: DB patches applied on top of the upstream schema. `WarRock-Chapter-1-Server/`: upstream C# reference (submodule, read-only).
 - `docs/protocol/`: protocol reference (GitHub Pages site). Update the matching page with every protocol-level change.
 
