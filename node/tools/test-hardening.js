@@ -322,6 +322,98 @@ const { users } = require('../game/state');
     assert.strictEqual(webTokenUser(b).userId, 1);
   }
 
+  // Movement anticheat: normal running passes, 2x speed and a teleport are flagged, respawns are not
+  {
+    const { checkMovement, markSpawn } = require('../game/anticheat');
+    const flags = [];
+    const onStrike = (u, kind) => (flags.push(kind), kind);
+    const run = (u, speed, from, ms = 3000) => {
+      for (let t = 0; t <= ms; t += 110) checkMovement(u, { x: from + (speed * t) / 1000, h: 0, z: 0, t: 100000 + t }, onStrike);
+    };
+    const honest = { channel: 1 };
+    run(honest, 340, 0);
+    assert.deepStrictEqual(flags, [], 'sprinting at 340 u/s is fine');
+    run({ channel: 1 }, 700, 0);
+    assert.ok(flags.includes('speed'), '700 u/s is a speedhack');
+    flags.length = 0;
+    const jumper = { channel: 1 };
+    checkMovement(jumper, { x: 0, h: 0, z: 0, t: 200000 }, onStrike);
+    checkMovement(jumper, { x: 4000, h: 0, z: 0, t: 200110 }, onStrike);
+    assert.deepStrictEqual(flags, ['teleport'], '4000 units in one frame');
+    flags.length = 0;
+    markSpawn(jumper); // respawn: the next big jump is legitimate
+    checkMovement(jumper, { x: 9000, h: 0, z: 0, t: Date.now() + 100 }, onStrike);
+    assert.deepStrictEqual(flags, [], 'no teleport right after a respawn');
+    run({ channel: 2 }, 900, 0);
+    assert.deepStrictEqual(flags, [], 'Urban Ops not checked (vehicles)');
+
+    // client clock: honest replies (with one 2.4 s late, as seen live) pass, a 2x clock is caught within ~10 s
+    const { checkClock } = require('../game/anticheat');
+    const pings = (u, deltas) => {
+      let tick = 1e6, now = 0;
+      deltas.forEach((d, i) => { tick += d; now += i === 5 ? 7408 : i === 6 ? 2596 : 5000; checkClock(u, tick, now, onStrike); });
+    };
+    pings({}, Array(20).fill(5010));
+    assert.deepStrictEqual(flags, [], 'normal clock, one late reply');
+    pings({}, [...Array(5).fill(5000), ...Array(4).fill(10200)]);
+    assert.ok(flags.length && flags.every((k) => k === 'speed'), '2x clock');
+
+    // superjump: 800 units up in one frame, while a normal 60-unit jump passes
+    flags.length = 0;
+    const hopper = { channel: 1 };
+    [0, 60, 0].forEach((h, i) => checkMovement(hopper, { x: 0, h, z: 0, t: 300000 + i * 110 }, onStrike));
+    assert.deepStrictEqual(flags, [], 'normal jump');
+    checkMovement(hopper, { x: 0, h: 800, z: 0, t: 300440 }, onStrike);
+    assert.deepStrictEqual(flags, ['superjump'], 'superjump');
+
+    // no fall damage: a long fall that lands needs the client's fall-damage report within 1.5 s
+    const { fallDamaged } = require('../game/anticheat');
+    const fall = (u, report) => {
+      flags.length = 0;
+      const hs = [700, 650, 500, 300, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+      hs.forEach((h, i) => {
+        if (report && i === 7) fallDamaged(u);
+        checkMovement(u, { x: 0, h, z: 0, t: 400000 + i * 110 }, onStrike);
+      });
+    };
+    fall({ channel: 1 }, true);
+    assert.deepStrictEqual(flags, [], 'fall with damage reported');
+    fall({ channel: 1 }, false);
+    assert.deepStrictEqual(flags, ['nofall'], 'fall without damage');
+
+    // teleport straight down under the map (OPK hiding) counts too
+    flags.length = 0;
+    const diver = { channel: 1 };
+    checkMovement(diver, { x: 0, h: 0, z: 0, t: 500000 }, onStrike);
+    checkMovement(diver, { x: 0, h: -3000, z: 0, t: 500110 }, onStrike);
+    assert.deepStrictEqual(flags, ['teleport'], 'under the map');
+  }
+
+  // OPK: a hit whose impact point is far from where the victim says it is gets dropped
+  {
+    const { HANDLERS, SUB } = require('../game/gamesubs');
+    const a = { id: 601, sessionId: 601, displayname: 'Opk', socket: { sendPacket() {}, destroy() {} }, equipment: { 3: ['DB01'] } };
+    const v = { id: 602, sessionId: 602, pos: { x: 5000, h: 0, z: 5000, t: Date.now() } };
+    a.socket.user = a;
+    users.set(601, a).set(602, v);
+    const victim = { sessionId: 602, slot: 4, team: 1, alive: true, health: 1000 };
+    const room = { state: 2, mode: 2, friendlyFire: false, players: new Map([[601, { slot: 0, team: 0, class: 3, alive: true }], [602, victim]]) };
+    const hit = (x, z) => HANDLERS[SUB.PLAYER_DAMAGE](room, room.players.get(601),
+      ['0', '1', '1', '4', '0', '1', '0', '4', '0', '0', '0', '1240', '0', '0', String(x), '20', String(z), '4', '0', '9', '5', '0', 'DB01'], a, null);
+    assert.strictEqual(hit(200, 300), null, 'impact 6000 units from the victim: dropped');
+    assert.strictEqual(victim.health, 1000);
+
+    // after a teleport the attacker's hits are ignored until they respawn, even when they land on the victim
+    const { strike, markSpawn } = require('../game/anticheat');
+    strike(a, 'teleport', 'test');
+    assert.strictEqual(hit(5000, 5000), null, 'teleported: on-target hit dropped');
+    assert.strictEqual(victim.health, 1000);
+    markSpawn(a);
+    assert.ok(hit(5000, 5000), 'after respawn the hit counts');
+    users.delete(601);
+    users.delete(602);
+  }
+
   process.stdout.write('test-hardening: ok\n');
 })().catch((err) => {
   process.stderr.write(err.stack + '\n');
