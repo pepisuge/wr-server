@@ -201,10 +201,12 @@ async function clanPage(res, db, s, notice) {
 
   body += `<div class="box"><p><b>${esc(c.name)}</b> &middot; ${c.members}/${clan.MAX_MEMBERS} members &middot; W/L ${c.wins}/${c.losses} &middot; you are ${RANK_NAME[u.clanRank]}</p>
 <table><tr><th>Name</th><th>Rank</th><th>XP</th><th></th></tr>${members.map((r) => tr(r, memberButtons(r))).join('')}</table></div>`;
-  if (boss && pending.length) {
-    body += `<div class="box"><h1>Applicants</h1><table><tr><th>Name</th><th>Rank</th><th>XP</th><th></th></tr>${pending
-      .map((r) => tr(r, act(s, 'accept', 'Accept', target(r.id)) + act(s, 'refuse', 'Refuse', target(r.id), 'danger')))
-      .join('')}</table></div>`;
+  if (boss) {
+    body += `<div class="box"><h1>Applicants</h1>${pending.length
+      ? `<table><tr><th>Name</th><th>Rank</th><th>XP</th><th></th></tr>${pending
+        .map((r) => tr(r, act(s, 'accept', 'Accept', target(r.id)) + act(s, 'refuse', 'Refuse', target(r.id), 'danger')))
+        .join('')}</table>`
+      : '<p class="muted">No applications. Players apply from their own Clan page (or in game); they show up here to accept or refuse. Once in, each member gets buttons here: Officer/Demote, Kick and, for the master, Make master.</p>'}</div>`;
   }
   body += `<div class="box">${u.clanRank === clan.RANK.MASTER ? act(s, 'disband', 'Disband the clan', '', 'danger') + ' <span class="muted">Hand the clan to someone else first if you want to leave it.</span>' : act(s, 'leave', 'Leave the clan', '', 'danger')}</div>`;
   send(res, 200, page('Clan', body, s));
