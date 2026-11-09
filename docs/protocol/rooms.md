@@ -106,3 +106,5 @@ Host toggle separate from capacity. Joining a locked room returns `94060` (`User
 ### Room roster: `PLAYER_INFO` (29952)
 
 Sent **only on room join**, and **never to a player about themselves**. Resending it mid-match resets the shooter's HUD (it re-renders their class). `kills`/`deaths` in it are **lifetime** account stats; `class` is the class from the last spawn.
+
+**Own entry in PLAYER_INFO (0x7500).** After a room creation or a join the server sends the full player list, the receiver's own entry included. Client 22 loads a player's clan emblem only while parsing PLAYER_INFO (clan id > 0 → emblem download, see [clans](clans.md)); without its own entry a player saw everyone's emblem but their own (grey placeholder).
