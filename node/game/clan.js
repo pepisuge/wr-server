@@ -80,11 +80,11 @@ function setAuthDb(pool) {
 // In-memory mirror of the `clan` table, same Map-of-state pattern as
 // state.js's channels/rooms. Clan id 0 is the schema's reserved "blank"/
 // disbanded row and is never loaded - it's how we spell "no clan".
-const clans = new Map(); // clanId -> { id, name, master, members, wins, losses, dateCreation, eslogan }
+const clans = new Map(); // clanId -> { id, name, master, members, wins, losses, draws, dateCreation, eslogan, emblem, emblemData }
 
 async function loadClans(db) {
   const [rows] = await db.query(
-    'SELECT id, name, master, members, wins, losses, date_creation, eslogan FROM clan WHERE disbanded = 0 AND validated = 1 AND id > 0'
+    'SELECT id, name, master, members, wins, losses, draws, date_creation, eslogan, emblem, emblem_data FROM clan WHERE disbanded = 0 AND validated = 1 AND id > 0'
   );
   for (const r of rows) {
     clans.set(r.id, {
@@ -94,8 +94,11 @@ async function loadClans(db) {
       members: r.members,
       wins: r.wins,
       losses: r.losses,
+      draws: r.draws,
       dateCreation: r.date_creation,
       eslogan: r.eslogan,
+      emblem: r.emblem,
+      emblemData: r.emblem_data,
     });
   }
 }
@@ -126,12 +129,21 @@ function persist(db, sql, params) {
   db.query(sql, params).catch((err) => console.error('clan: failed to persist:', err.message));
 }
 
-// No `exp` column in this schema (ToXiiC awards +1000/+500/+250 per clan-war
-// outcome, tracked nowhere here yet - clan war is still self-designed, see
-// the guide). Approximated from wins so ranking/MyClan/ClanRanking have a
-// non-constant number to sort/display instead of a placeholder zero.
+// No `exp` column in this schema: derived from the war record with ToXiiC's per-war awards
+// (win +1000, draw +500, loss +250), so ranking/MyClan/ClanRanking and the site agree.
 function clanExp(clan) {
-  return clan.wins * 250;
+  return clan.wins * 1000 + clan.draws * 500 + clan.losses * 250;
+}
+
+// Clan war result (rooms with isClanWar, see roundtimer.js): winner = clan id, or null for a draw.
+function recordWar(db, clan1, clan2, winner) {
+  for (const id of [clan1, clan2]) {
+    const c = clans.get(id);
+    if (!c) continue;
+    const col = winner === null ? 'draws' : winner === id ? 'wins' : 'losses';
+    c[col]++;
+    persist(db, `UPDATE clan SET ${col} = ${col} + 1 WHERE id = ?`, [id]);
+  }
 }
 
 function clanRankingIndex(clanId) {
@@ -228,7 +240,7 @@ async function createClan(db, u, name) {
   u.money -= CREATE_COST;
   u.clanId = clanId;
   u.clanRank = RANK.MASTER;
-  clans.set(clanId, { id: clanId, name, master: u.id, members: 1, wins: 0, losses: 0, dateCreation, eslogan: null });
+  clans.set(clanId, { id: clanId, name, master: u.id, members: 1, wins: 0, losses: 0, draws: 0, dateCreation, eslogan: null, emblem: null, emblemData: null });
 
   persist(db, 'UPDATE user_details SET money = GREATEST(0, CAST(money AS SIGNED) - ?), clanid = ?, clanrank = ? WHERE id = ?', [CREATE_COST, clanId, RANK.MASTER, u.id]);
 }
@@ -453,6 +465,7 @@ async function handleJoinAction(socket, db, payload) {
 
 // Subtype 10 - Game/Clan.cs:318-369. Promote-to-officer(0)/demote(1)/kick(2). Unlike the reference, the target must be
 // a member or officer of this clan: the master can't be demoted or kicked (that left clans without a master).
+// Officers may only kick plain members; rank changes and kicking an officer are the master's (server owner's choice).
 async function rankAction(db, u, action, targetId) {
   const clan = clans.get(u.clanId);
   if (!clan || (u.clanRank !== RANK.OFFICER && u.clanRank !== RANK.MASTER)) return 'Only the master or an officer can do this.';
@@ -460,6 +473,7 @@ async function rankAction(db, u, action, targetId) {
   if (!target || target.clanId !== clan.id || (target.clanRank !== RANK.MEMBER && target.clanRank !== RANK.OFFICER)) {
     return 'No such member.';
   }
+  if (u.clanRank !== RANK.MASTER && (action !== 2 || target.clanRank === RANK.OFFICER)) return 'Only the master can do this.';
 
   if (action === 0 || action === 1) {
     target.clanRank = action === 0 ? RANK.OFFICER : RANK.MEMBER;
@@ -507,33 +521,35 @@ async function handlePromote(socket, db, payload) {
   if (!(await promote(db, socket.user, Number(payload[0])))) sendReply(socket, SUB.PROMOTE, [1]);
 }
 
-// Clan war, still designed from scratch - see the guide: the reference has
-// isClanWar/Clan1/Clan2 wire fields and Room.cs code that keys off them, but
-// no CLAN_SYSTEM subtype anywhere ever triggers it (a real client likely
-// starts one through a different, still-unidentified path, maybe
-// RoomCreation's own fields directly). SUB.START_WAR (1000) is a synthetic
-// number chosen to not collide with any real subtype, not a captured value.
-// Only a clan master/officer can declare war; no accept/decline handshake in
-// this first cut - the room exists immediately.
-// require('./rooms') is deliberately lazy (inside the function, not at
-// module top) - rooms.js itself requires clan.js for clanInfo, and calling
-// through the cycle only after both modules have finished loading (i.e.
-// inside a handler, not at require-time) is what keeps it safe.
-function handleStartWar(socket, db, payload) {
-  const u = socket.user;
+// Website: the master picks a gallery emblem ('g<n>') or uploads one ('u' + image bytes, checked by emblems.js).
+function setEmblem(db, u, emblem, data = null) {
   const clan = clans.get(u.clanId);
-  if (!clan || (u.clanRank !== RANK.MASTER && u.clanRank !== RANK.OFFICER)) return sendReply(socket, SUB.START_WAR, [0]);
+  if (!clan || u.clanRank !== RANK.MASTER) return 'Only the master can change the emblem.';
+  clan.emblem = emblem;
+  clan.emblemData = data;
+  persist(db, 'UPDATE clan SET emblem = ?, emblem_data = ? WHERE id = ?', [emblem, data, clan.id]);
+}
 
-  const opponentId = Number(payload[0]);
+// Clan war is self-designed (no captured client flow starts one): START_WAR (1000) is outside the real 0-17 subtypes.
+// No accept step: the room exists at once. require('./rooms') stays lazy: rooms.js requires this file.
+// Shared with the website. The declaring player must be online in a lobby: the room is theirs (they become its master).
+function declareWar(u, opponentId) {
+  const clan = clans.get(u.clanId);
+  if (!clan || (u.clanRank !== RANK.MASTER && u.clanRank !== RANK.OFFICER)) return { error: 'Only the master or an officer can declare war.' };
   const opponent = clans.get(opponentId);
-  if (!opponent || opponentId === u.clanId) return sendReply(socket, SUB.START_WAR, [0]);
+  if (!opponent || opponentId === u.clanId) return { error: 'Choose another clan.' };
+  if (!u.socket || u.channel === null || u.roomId !== null) return { error: 'Be in a game lobby (not in a room) to declare war: the war room is created for you.' };
 
   const { createClanWarRoom } = require('./rooms');
   const room = createClanWarRoom(u, opponentId);
+  chat().sendClanNotice(opponentId, `${clan.name} declared war on your clan! Join room #${room.id} (channel ${u.channel}).`);
+  chat().sendClanNotice(clan.id, `War on ${opponent.name}: room #${room.id} is ready, join it.`);
+  return { room };
+}
 
-  chat().sendClanNotice(opponentId, `${clan.name} ha dichiarato guerra al tuo clan! Stanza #${room.id} pronta.`);
-
-  sendReply(socket, SUB.START_WAR, [1, room.id]);
+function handleStartWar(socket, db, payload) {
+  const { room } = declareWar(socket.user, Number(payload[0]));
+  sendReply(socket, SUB.START_WAR, room ? [1, room.id] : [0]);
 }
 
 function handleClanSystem(db) {
@@ -577,6 +593,10 @@ module.exports = {
   RANK,
   MAX_MEMBERS,
   CREATE_COST,
+  clanExp,
+  recordWar,
+  declareWar,
+  setEmblem,
   clans,
   memberOf,
   resolveDisplaynames,

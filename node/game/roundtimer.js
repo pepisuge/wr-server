@@ -44,6 +44,8 @@ function scoreboardValues(room) {
 // remaining ticket pools (TeamDeathMatch.ScoreboardA/B) instead of FFA's
 // target-kills/leader-kills.
 function startRoundTimer(room, db) {
+  // Clan war: who was there at the start decides whether the result counts (see settleWar).
+  if (room.isClanWar > 0) room.warTeams = [0, 1].map((t) => [...room.players.values()].filter((p) => p.team === t).length);
   room.upTick = 0;
   room.downTick = 3600000; // 1 hour, matches FreeForAll.Initilize's Room.DownTick - Explosive's own initExplosiveMatch overwrites this right after, per round
   room.tickInterval = setInterval(() => {
@@ -144,6 +146,8 @@ function endRound(room, db) {
   // KillsDerbaranLeft/KillsNIULeft (our room.tickets) here instead of a
   // hardcoded 0/0, for every non-Explosive mode including FFA. Needs live
   // retest now that it's in the right packet position.
+  if (room.isClanWar > 0) settleWar(room, db, players, teamKills);
+
   const roundFields =
     room.mode === EXPLOSIVE_MODE ? [room.teamRounds[0], room.teamRounds[1]] : [room.tickets[0], room.tickets[1]];
   const fields = [1, ...roundFields, teamKills[0], teamDeaths[0], teamKills[1], teamDeaths[1], 0, 0, players.length];
@@ -158,4 +162,21 @@ function endRound(room, db) {
   if (sockets.length) broadcastPacket(sockets, XOR.external, END_GAME, fields);
 }
 
-module.exports = { startRoundTimer, stopRoundTimer, checkWinCondition, endRound, scoreboardValues };
+// Clan war result (#11): team 0 is clan1 (the challenger), team 1 clan2. Counts only if both clans had players when
+// the match started, so a war against an empty room earns nothing; a side that left by the end loses.
+// Winner by rounds (Explosive), tickets (TDM), else kills; equal = draw.
+function settleWar(room, db, players, teamKills) {
+  const start = room.warTeams || [0, 0];
+  room.warTeams = null; // once per match
+  if (!start[0] || !start[1]) return;
+  const present = [0, 1].map((t) => players.some((p) => p.team === t));
+  let score;
+  if (!present[0] || !present[1]) score = present.map(Number);
+  else if (room.mode === EXPLOSIVE_MODE) score = room.teamRounds;
+  else if (room.mode === TDM_MODE) score = room.tickets;
+  else score = teamKills;
+  const winner = score[0] === score[1] ? null : score[0] > score[1] ? room.clan1 : room.clan2;
+  require('./clan').recordWar(db, room.clan1, room.clan2, winner);
+}
+
+module.exports = { settleWar, startRoundTimer, stopRoundTimer, checkWinCondition, endRound, scoreboardValues };

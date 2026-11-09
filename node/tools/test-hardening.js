@@ -270,7 +270,43 @@ const { users } = require('../game/state');
     assert.strictEqual(writes.length, 0, 'refused actions write nothing');
     assert.strictEqual(await clan.joinAction(db, officer, 0, 504), undefined, 'real applicant accepted');
     assert.strictEqual(clan.clans.get(77).members, 3);
+
+    // ranks are the master's: an officer can kick a plain member, nothing else
+    rows[505] = { id: 505, money: 0, clanid: 77, clanrank: 1 };
+    assert.ok(await clan.rankAction(db, officer, 0, 502), 'officer cannot promote');
+    assert.ok(await clan.rankAction(db, officer, 1, 505), 'officer cannot demote an officer');
+    assert.ok(await clan.rankAction(db, officer, 2, 505), 'officer cannot kick an officer');
+    assert.strictEqual(await clan.rankAction(db, officer, 2, 502), undefined, 'officer kicks a member');
+    const master = { id: 501, displayname: 'Boss', clanId: 77, clanRank: clan.RANK.MASTER };
+    assert.strictEqual(await clan.rankAction(db, master, 1, 505), undefined, 'master demotes an officer');
     clan.clans.delete(77);
+
+    // clan war result: only with both clans present at the start; tickets decide TDM, equal = draw
+    const { settleWar } = require('../game/roundtimer');
+    const mk = (id) => ({ id, name: `c${id}`, wins: 0, losses: 0, draws: 0 });
+    clan.clans.set(81, mk(81)).set(82, mk(82));
+    const war = (warTeams, teams, tickets) => settleWar({ isClanWar: 1, clan1: 81, clan2: 82, mode: 2, tickets, warTeams }, db, teams.map((team) => ({ team })), [0, 0]);
+    war([1, 0], [0], [30, 30]);
+    assert.strictEqual(clan.clans.get(81).wins, 0, 'war against an empty side does not count');
+    war([1, 1], [0, 1], [12, 0]);
+    war([1, 1], [0, 1], [5, 5]);
+    war([1, 1], [0], [3, 9]);
+    const [c1, c2] = [clan.clans.get(81), clan.clans.get(82)];
+    assert.deepStrictEqual([c1.wins, c1.draws, c1.losses, c2.wins, c2.draws, c2.losses], [2, 1, 0, 0, 1, 2], 'tickets win, draw, leaver loses');
+    assert.strictEqual(clan.clanExp(c1), 2500);
+    clan.clans.delete(81);
+    clan.clans.delete(82);
+  }
+
+  // Emblem uploads: PNG/JPEG/BMP only, size and dimensions capped
+  {
+    const { checkUpload, galleryEmblem, imageInfo } = require('../game/emblems');
+    const png = (w, h) => { const b = Buffer.alloc(33); b.writeUInt32BE(0x89504e47, 0); b.writeUInt32BE(w, 16); b.writeUInt32BE(h, 20); return b; };
+    assert.strictEqual(checkUpload(png(32, 32)), undefined, '32x32 PNG accepted');
+    assert.ok(checkUpload(png(4000, 32)), 'too wide refused');
+    assert.ok(checkUpload(Buffer.from('<svg onload=alert(1)>')), 'not an image refused');
+    assert.ok(checkUpload(Buffer.alloc(70 * 1024, 0x42)), 'too large refused');
+    assert.deepStrictEqual(imageInfo(galleryEmblem(0)), { type: 'image/bmp', w: 32, h: 32 });
   }
 
   // Website sign-on tokens: well-formed only, one per account (a new login replaces the old one)

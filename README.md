@@ -23,7 +23,7 @@ Two processes: `auth-server.js` (login / server list) and `game-server.js` (room
 | **Urban Ops** | `█████░░░░░` 50% | everything in CQC on Urban maps | vehicles ([#5](https://github.com/pepisuge/wr-server/issues/5)), Conquest ([#4](https://github.com/pepisuge/wr-server/issues/4)) |
 | **Battle Group** | `███▌░░░░░░` 35% | infantry modes on Battle Group maps | vehicles ([#5](https://github.com/pepisuge/wr-server/issues/5)), Conquest ([#4](https://github.com/pepisuge/wr-server/issues/4)) |
 | **Chat system** | `████████░░` 80% | lobby, room, whisper, clan chat, mute, GM commands | team chat, English system messages ([#14](https://github.com/pepisuge/wr-server/issues/14)) |
-| **Clan system** | `██████░░░░` 60% | create, join/leave, ranks, members, ranking, clan chat | real client UI check ([#12](https://github.com/pepisuge/wr-server/issues/12)), clan war results ([#11](https://github.com/pepisuge/wr-server/issues/11)) |
+| **Clan system** | `███████▌░░` 75% | create, join/leave, ranks, members, ranking, clan chat, emblems, clan war declared from the site with results and points | real client UI check ([#12](https://github.com/pepisuge/wr-server/issues/12)), clan war accept/decline step |
 | **Shop & inventory** | `███████▌░░` 75% | buy (atomic), equipment and loadouts, coupons, rename and K/D reset items | renewal ([#8](https://github.com/pepisuge/wr-server/issues/8)), item effects ([#7](https://github.com/pepisuge/wr-server/issues/7)) |
 | **Progression** | `████████░░` 80% | XP, levels, level-up rewards, premium, boosters | |
 | **Anti-cheat (server side)** | `███████▌░░` 75% | weapon must be in the loadout, hit rate cap, knife range, attacker slot enforced, connection and packet limits | aim/headshot validation (needs map geometry) |
@@ -38,7 +38,7 @@ cd node && npm install
 node auth-server.js
 node game-server.js
 ```
-Without Docker: load `WarRock-Chapter-1-Server/Databases/*.SQL` (`git submodule update --init`), then `sql/03`…`09` into `wres2`, in order.
+Without Docker: load `WarRock-Chapter-1-Server/Databases/*.SQL` (`git submodule update --init`), then `sql/03`…`10` into `wres2`, in order.
 **Warning:** the upstream dumps contain `USE` + `DROP TABLE`, so they wipe an existing `masterserver`/`wres2`; back up first.
 
 With Docker (from the repo root, after `git submodule update --init` and `cp docker/.env.example docker/.env`):
