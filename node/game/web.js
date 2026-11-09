@@ -256,7 +256,46 @@ async function route(req, res, db, authDb) {
     if (!s) return redirect(res, '/login');
     return post ? clanAction(req, res, db, s) : clanPage(res, db, s);
   }
+  if (path === '/ClanAvatar.aspx' && !post) {
+    const name = new URLSearchParams(req.url.split('?')[1] || '').get('Clan') || '';
+    console.log(`web: clan emblem for "${name.slice(0, 40)}"`);
+    res.writeHead(200, { 'Content-Type': 'image/bmp', 'Cache-Control': 'max-age=3600' });
+    return res.end(emblem(name));
+  }
   send(res, 404, page('Not found', '<div class="box"><p><a href="/">Home</a></p></div>', s));
+}
+
+// Clan emblem for the game client (it downloads `ClanAvatar.aspx?Clan=<name>` into a .jpg but loads it through
+// Direct3D, which reads any format): a shield in a colour picked from the name, on dark grey. 32x32 24-bit BMP,
+// so no image library is needed. Uploaded emblems can replace this later.
+function emblem(name) {
+  const S = 32;
+  const hash = crypto.createHash('md5').update(name.toLowerCase()).digest();
+  const colour = [hash[0], hash[1], hash[2]].map((v) => 80 + (v % 160)); // never too dark on the grey
+  const rowSize = S * 3; // 96, already a multiple of 4
+  const buf = Buffer.alloc(54 + rowSize * S);
+  buf.write('BM', 0);
+  buf.writeUInt32LE(buf.length, 2);
+  buf.writeUInt32LE(54, 10);
+  buf.writeUInt32LE(40, 14);
+  buf.writeInt32LE(S, 18);
+  buf.writeInt32LE(S, 22); // bottom-up rows
+  buf.writeUInt16LE(1, 26);
+  buf.writeUInt16LE(24, 28);
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const top = S - 1 - y; // distance from the top edge
+      const dx = Math.abs(x - 15.5);
+      // shield: straight sides down to 60%, then a point at the bottom
+      const inShield = top >= 4 && top <= 28 && dx <= 11 && (top < 18 || dx <= (28 - top) * 1.1);
+      const rgb = inShield ? colour : [48, 50, 52];
+      const o = 54 + y * rowSize + x * 3;
+      buf[o] = rgb[2];
+      buf[o + 1] = rgb[1];
+      buf[o + 2] = rgb[0];
+    }
+  }
+  return buf;
 }
 
 function startWeb(db, authDb, port) {

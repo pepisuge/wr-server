@@ -42,6 +42,8 @@ Ranks (`clanrank`): `0` member, `1` officer, `2` master, `9` pending applicant.
 
 `node/game/web.js` (inside the game server, port `WR_WEB_PORT`, default 8080) runs the same actions (`createClan`, `applyClan`, `leaveClan`, `disbandBy`, `joinAction`, `rankAction`, `promote` in `clan.js`) from plain HTML forms, so the in-memory state stays shared with the game. Leaving as master is refused there (in game it silently disbands): the site has an explicit disband button. Plain HTML with no client JS, so the page also works in the game's embedded browser: the client chat command `/url http://<server>:8080/clan` opens it, `/close url` closes it (client-side, never sent to the server).
 
+Clan emblems: the client downloads `http://ops.warrock.net/ClanAvatar.aspx?Clan=<name>` with `URLDownloadToFile` (code at `0x4cd620` in client 22) and loads the file through Direct3D; on failure it falls back to `texture/Avata/DefaultClanMark.jpg`, which the client doesn't ship (white box). The site serves `/ClanAvatar.aspx?Clan=<name>`: a generated 32x32 BMP shield coloured from the name. Point the client at it with a hosts entry for `ops.warrock.net` (port 80) or by patching that push (the clan UI DLL does).
+
 ## Clan war (self-designed)
 
 `isClanWar`/`Clan1`/`Clan2` exist in the room packets (`-1` = no), but neither reference shows how a real client starts a war. Here a master declares war on another clan by id (`START_WAR = 1000`): the server creates a room with `isClanWar=1` and assigns teams by clan (challenger team 0, challenged team 1); the other clan gets a chat notice. Manual team changes are ignored. War results (`wins`/`losses`/`draws`, `exp`) are not persisted yet.
