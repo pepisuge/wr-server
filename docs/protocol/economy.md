@@ -86,7 +86,7 @@ Ported from ToXiiC Core:
 | `/userinfo`, `/roominfo`, `/online` | in-memory state (`/roominfo` shows the map name) |
 | `/closeroom`, `/endgame`, `/extendtime` | room control |
 | `/start` | makes the GM master and lets the room's next Start skip the ready / team-balance checks; the GM then presses Start. The client only starts a match when it sends Start itself: a server-pushed `START_REPLY` is ignored (live, same as the autostart attempts) and leaves the room "Playing" with nobody in a match |
-| `/takemaster`, `/setmaster <player>` | new: the GM (or a player) becomes room master. No captured packet says "new master": a `RoomLeave` broadcast for an **empty** slot carries the new master in its master field (the field clients read when a master leaves). Needs one empty slot |
+| `/takemaster`, `/setmaster <player>` | new: the GM (or a player) becomes room master. No captured packet says "new master": a `RoomLeave` broadcast for an **empty** slot carries the new master in its master field (the field clients read when a master leaves); verified live, the client follows it. Needs one empty slot |
 | `/setlevel`, `/addmoney`, `/setpremium <player\|id> <tier 0-4> <days>` | progression (`days=0` = no practical expiry) |
 | `/warn` | new: a whisper to the target |
 | `/strikes <player>` | new: the player's last anticheat strikes this session (kind, detail, age); online GMs also get every strike as a whisper when it happens |
