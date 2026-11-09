@@ -3,7 +3,7 @@
 // (datasets: real infantry tops out at ~340 u/s, bots at ~355; a frame every ~0.11 s).
 // ponytail: CQC channel only - Urban Ops / Battle Group vehicles move faster than infantry and their frames aren't
 // told apart yet; extend once vehicle frames are decoded.
-const MAX_SPEED = 500; // u/s over the window, horizontal
+const MAX_SPEED = 440; // u/s over the window, horizontal (live 3x speedhack test: 450-480; honest play peaks ~390)
 const WINDOW_MS = 1000;
 const TELEPORT = 1500; // units between two samples less than a second apart
 const MIN_SAMPLE_MS = 50; // the same frame reaches the server once per room peer: ignore copies
@@ -18,6 +18,31 @@ const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 function state(u) {
   if (!u.ac) u.ac = { samples: [], strikes: [], lastStrike: {}, spawnAt: 0 };
   return u.ac;
+}
+
+// Speedhacks speed up the client's clock, and every TCP packet carries that clock (`tick`). Between ping replies (every
+// 5 s) it advances like the server's own clock within ~25 ms (live; 2x/3x speedhack: 10200/15000 ms per 5 s). Measured
+// over windows, not reply to reply, so one delayed reply (network lag) can't look like a fast clock. Works whatever the
+// movement looks like: the game caps running speed, 3x only ran ~30% faster.
+const CLOCK_CHECKS = [
+  { windowMs: 10000, ratio: 1.5 }, // obvious speedhack, caught in ~10 s
+  { windowMs: 30000, ratio: 1.2 }, // a subtle one
+];
+
+function checkClock(u, tick, now = Date.now(), onStrike = strike) {
+  const s = state(u);
+  const ticks = (s.ticks = (s.ticks || []).filter((x) => now - x.now <= 40000 && x.tick <= tick)); // drop old and pre-wrap samples
+  ticks.push({ tick, now });
+  for (const { windowMs, ratio } of CLOCK_CHECKS) {
+    const base = [...ticks].reverse().find((x) => now - x.now >= windowMs);
+    if (!base) continue;
+    const r = (tick - base.tick) / (now - base.now);
+    if (r > ratio) {
+      s.ticks = [{ tick, now }];
+      return onStrike(u, 'speed', `client clock ${r.toFixed(2)}x over ${Math.round((now - base.now) / 1000)} s`);
+    }
+  }
+  return null;
 }
 
 // Called from gamesubs.js when the player (re)spawns.
@@ -71,4 +96,4 @@ function strike(u, kind, detail) {
   return kind;
 }
 
-module.exports = { checkMovement, markSpawn, MAX_SPEED, TELEPORT };
+module.exports = { checkMovement, checkClock, markSpawn, MAX_SPEED, TELEPORT };

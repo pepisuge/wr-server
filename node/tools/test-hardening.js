@@ -346,6 +346,17 @@ const { users } = require('../game/state');
     assert.deepStrictEqual(flags, [], 'no teleport right after a respawn');
     run({ channel: 2 }, 900, 0);
     assert.deepStrictEqual(flags, [], 'Urban Ops not checked (vehicles)');
+
+    // client clock: honest replies (with one 2.4 s late, as seen live) pass, a 2x clock is caught within ~10 s
+    const { checkClock } = require('../game/anticheat');
+    const pings = (u, deltas) => {
+      let tick = 1e6, now = 0;
+      deltas.forEach((d, i) => { tick += d; now += i === 5 ? 7408 : i === 6 ? 2596 : 5000; checkClock(u, tick, now, onStrike); });
+    };
+    pings({}, Array(20).fill(5010));
+    assert.deepStrictEqual(flags, [], 'normal clock, one late reply');
+    pings({}, [...Array(5).fill(5000), ...Array(4).fill(10200)]);
+    assert.ok(flags.length && flags.every((k) => k === 'speed'), '2x clock');
   }
 
   process.stdout.write('test-hardening: ok\n');

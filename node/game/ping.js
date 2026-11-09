@@ -4,6 +4,7 @@
 // ping value, which we skip tracking - see the ponytail note below.
 const { users } = require('./state');
 const { GameConfig, checkPremiumExpiry } = require('./progression');
+const { checkClock } = require('./anticheat');
 
 const PING = 0x6400;
 const CHAT = 0x7400;
@@ -22,8 +23,10 @@ function premiumTimeLeft(u) {
 // The client already replies to every Ping with its own PING-id packet
 // (visto nei log: `id=25600` in ingresso) - prima veniva scartato come
 // pacchetto sconosciuto. Registrata in handlers.js's dispatch map.
-function handlePingReply(socket) {
-  if (socket.user) socket.user.lastPong = Date.now();
+function handlePingReply(socket, pkt) {
+  if (!socket.user) return;
+  socket.user.lastPong = Date.now();
+  checkClock(socket.user, Number(pkt.tick));
 }
 
 // ponytail: no real RTT tracking (the reference's pingOk lock) - just a
