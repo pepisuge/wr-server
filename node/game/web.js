@@ -13,6 +13,8 @@ const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
 const MAX_BODY = 4096;
 const USERNAME_RE = /^[A-Za-z0-9]{3,20}$/; // users.username varchar(20); the login accepts only alphanumerics
 const NICKNAME_RE = /^[A-Za-z0-9]{3,16}$/; // same rule as the in-game rename (shop.js)
+// The client caches each emblem file by name for the whole session: a change shows after restarting the game.
+const EMBLEM_CHANGED = 'Emblem changed. In game it shows after you restart the game.';
 const RANK_NAME = { 0: 'Member', 1: 'Officer', 2: 'Master', 9: 'Applicant' };
 
 const sessions = new Map(); // token -> { userId, username, displayname, csrf, expires }
@@ -269,7 +271,7 @@ async function clanAction(req, res, db, s) {
   };
   const run = actions[b.get('action')];
   const err = run ? await run() : 'Unknown action.';
-  clanPage(res, db, s, { text: err || 'Done.', ok: !err });
+  clanPage(res, db, s, { text: err || (b.get('action') === 'emblem' ? EMBLEM_CHANGED : 'Done.'), ok: !err });
 }
 
 function readRaw(req, max) {
@@ -315,7 +317,7 @@ async function uploadEmblem(req, res, db, s) {
   if (String(parts.csrf || '') !== s.csrf) return clanPage(res, db, s, { text: 'Session expired, try again.' });
   const u = await player(db, s);
   const err = emblems.checkUpload(parts.file) || clan.setEmblem(db, u, 'u', Buffer.from(parts.file));
-  clanPage(res, db, s, { text: err || 'Emblem uploaded. In game it shows after the next user list refresh.', ok: !err });
+  clanPage(res, db, s, { text: err || EMBLEM_CHANGED, ok: !err });
 }
 
 async function route(req, res, db, authDb) {
