@@ -84,7 +84,8 @@ Ported from ToXiiC Core:
 | `/tempban <player\|id> <hours> [reason]` | new: `status = 0` plus `users.ban_until` (`sql/11`); the game and website logins lift it once that time has passed |
 | `/giveitem`, `/giveroom` | same insert as a real purchase |
 | `/userinfo`, `/roominfo`, `/online` | in-memory state (`/roominfo` shows the map name) |
-| `/closeroom`, `/start [force]`, `/endgame`, `/extendtime` | room control (`force`: start even if not everyone is ready or teams are uneven) |
+| `/closeroom`, `/endgame`, `/extendtime` | room control |
+| `/start` | makes the GM master and lets the room's next Start skip the ready / team-balance checks; the GM then presses Start. The client only starts a match when it sends Start itself: a server-pushed `START_REPLY` is ignored (live, same as the autostart attempts) and leaves the room "Playing" with nobody in a match |
 | `/takemaster`, `/setmaster <player>` | new: the GM (or a player) becomes room master. No captured packet says "new master": a `RoomLeave` broadcast for an **empty** slot carries the new master in its master field (the field clients read when a master leaves). Needs one empty slot |
 | `/setlevel`, `/addmoney`, `/setpremium <player\|id> <tier 0-4> <days>` | progression (`days=0` = no practical expiry) |
 | `/warn` | new: a whisper to the target |

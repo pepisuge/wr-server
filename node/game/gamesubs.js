@@ -180,7 +180,8 @@ function beginMatch(room, db) {
 // AllowStartAlone override.
 function handleStart(room, player, payload, u, db) {
   if (player.slot !== room.master || room.state !== 1) return null;
-  if (!canStart(room)) return null;
+  if (!room.forceStart && !canStart(room)) return null; // forceStart: a GM unlocked it (gm.js /start)
+  room.forceStart = false;
   beginMatch(room, db);
   const out = [...payload];
   out[2] = room.map;
@@ -970,4 +971,4 @@ function handleGamePacket(socket, pkt, db) {
   if (result.checkAutoStart) tryAutoStart(room);
 }
 
-module.exports = { handleGamePacket, GAME_PACKET, handleScoreboardRequest, SCOREBOARD, HANDLERS, SUB, beginMatch };
+module.exports = { handleGamePacket, GAME_PACKET, handleScoreboardRequest, SCOREBOARD, HANDLERS, SUB };
