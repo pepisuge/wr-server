@@ -48,7 +48,7 @@ Clan war rooms: the client downloads `http://ops.warrock.net/ClanAvatar.aspx?Cla
 
 ## Clan war (self-designed)
 
-Declared from the website (master or officer, online in a lobby) or `START_WAR`. Results (#11): `roundtimer.js` `settleWar` at match end, winner by rounds (Explosive), tickets (TDM) or kills, equal = draw; it counts only if both clans had players when the match started, and a side gone by the end loses. Stored in `clan.wins/draws/losses`; points (`exp`) = win 1000, draw 500, loss 250, used by `CLAN_RANKING` and the site ranking.
+Declared from the website (master or officer, online in a lobby) or `START_WAR`. Team modes only: switching a war room to FFA is ignored (clanmates would shoot each other). Results (#11): `roundtimer.js` `settleWar` at match end, winner by rounds (Explosive), tickets (TDM) or kills, equal = draw; it counts only if both clans had players when the match started, and a side gone by the end loses. Stored in `clan.wins/draws/losses`; points (`exp`) = win 1000, draw 500, loss 250, used by `CLAN_RANKING` and the site ranking.
 
 Ranks: an officer can accept/refuse applicants and kick plain members; promoting/demoting officers, kicking an officer and handing over master are the master's.
 
