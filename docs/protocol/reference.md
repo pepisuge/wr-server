@@ -151,4 +151,4 @@ Good places to contribute:
 - **Invite sentinel edge case**: `roomId=0` is ambiguous while room 0 exists.
 - **Chat receive limit**: only the input limit (55) is known.
 - **Clan war** results persistence and a real client trigger; **clan chat** log (`chat_private_clan`).
-- **Not verified live**: clans with the real client UI, a real client against the Docker stack (CI only checks that it boots and registers), `AmmoRecharge`, `Suicide`, chat `Notice2`.
+- **Not verified live**: clans with the real client UI, a real client against the Docker stack (CI only checks that it boots and registers), `AmmoRecharge`, `Suicide`.

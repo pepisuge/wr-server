@@ -229,18 +229,11 @@ async function cmdSetPremium(socket, db, args) {
   reply(socket, `Premium di ${label} impostato a tier ${tier} per ${days > 0 ? `${days} giorni` : 'senza scadenza pratica'}.`);
 }
 
-// Ported from WarRock-ToXiiC-Core's User.isCommand "notice" branch - a
-// server-wide line, not scoped to a room/lobby like any chat.js TYPE.
-// Reuses the same "System>> " + ROOM_TO_ALL shape confirmed (Fase 36) to
-// render as a plain colored line, not a popup.
-const NOTICE_ROOM_TO_ALL = 4; // Game/Enums/ChatType.cs - same value chat.js's TYPE.ROOM_TO_ALL uses
+// Server-wide notice: a popup in the lobby, a yellow line inside rooms (chat.js sendNotice).
 function cmdNotice(socket, db, args) {
   const text = args.join(' ');
   if (!text) return reply(socket, 'Uso: /notice <messaggio>');
-  const sockets = [...users.values()].map((x) => x.socket);
-  for (const line of wrapLines(text, MAX_CHAT_LINE)) {
-    broadcastPacket(sockets, XOR.external, CHAT, [1, 0, 'System', NOTICE_ROOM_TO_ALL, 999, 'NULL', `System>> ${line}`]);
-  }
+  require('./chat').sendNotice(text); // lazy: chat.js requires this module
 }
 
 // Ported from ToXiiC-Core's "kick" - a full disconnect. Cleanup (room

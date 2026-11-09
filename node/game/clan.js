@@ -60,6 +60,9 @@ const SUB = {
 // an officer disband the clan, and had no concept of a pending applicant.
 const RANK = { MEMBER: 0, OFFICER: 1, MASTER: 2, PENDING: 9 };
 
+// Shown in game and, later, on the website: letters, digits, _ and - only, 5-20 long.
+const CLAN_NAME_RE = /^[A-Za-z0-9_-]{5,20}$/;
+
 const CREATE_COST = 10000; // Configs/Server.cs's Clan.CreationCost default
 const MAX_MEMBERS = 20; // ToXiiC's AddClan insert hardcodes maxusers=20; no upgrade path (UpgradeClan) ported
 const CLAN_ICON = 1001001; // ToXiiC's AddClan default iconid - no `iconid` column here to persist a real choice
@@ -160,7 +163,7 @@ async function resolveDisplaynames(ids) {
 // this before letting the player submit).
 function handleCheckName(socket, payload) {
   const name = (payload[0] || '').replace(/ /g, '');
-  if (name.length <= 4) return;
+  if (!CLAN_NAME_RE.test(name)) return;
   const exists = [...clans.values()].some((c) => c.name.toLowerCase() === name.toLowerCase());
   sendReply(socket, SUB.CHECK_NAME, [exists ? 62003 : 1]);
 }
@@ -176,6 +179,7 @@ function handleNickChange(socket, db, payload) {
   if (!clan) return;
 
   const newName = (payload[0] || '').replace(/ /g, '');
+  if (!CLAN_NAME_RE.test(newName)) return chat().sendSystemWhisper(socket, 'Clan names: 5-20 letters, digits, _ or -.');
   if ([...clans.values()].some((c) => c.name.toLowerCase() === newName.toLowerCase())) {
     return chat().sendSystemWhisper(socket, 'A clan has already this name, please choose another one');
   }
@@ -196,8 +200,8 @@ function handleNickChange(socket, db, payload) {
 // duplicate-key error on every restart after the first disband.
 async function handleCreate(socket, db, payload) {
   const u = socket.user;
-  const name = (payload[0] || '').replace(/ /g, '').slice(0, 25);
-  if (name.length <= 4) return;
+  const name = (payload[0] || '').replace(/ /g, '');
+  if (!CLAN_NAME_RE.test(name)) return chat().sendSystemWhisper(socket, 'Clan names: 5-20 letters, digits, _ or -.');
 
   if (u.clanId > 0) return chat().sendSystemWhisper(socket, 'Cannot create the clan because you are in a clan!');
   if ([...clans.values()].some((c) => c.name.toLowerCase() === name.toLowerCase())) {

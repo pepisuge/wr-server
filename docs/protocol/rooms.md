@@ -34,14 +34,18 @@ The message is `"<nick>>>\x1D<text>"` with spaces already escaped.
 
 | type | name | how the client renders it |
 |---|---|---|
-| 1 | Notice1 | **popup**, unusable for frequent messages |
-| 2 | Notice2 | not tested |
+| 1 | Notice1 | **notice popup** (same client function as 2), unusable for frequent messages |
+| 2 | Notice2 | **notice popup**; `/notice` uses it for players in the lobby |
 | 3 | LobbyToChannel | chat line |
-| 4 | Room_ToAll | chat line, **yellow** with prefix `System>> ` |
+| 4 | Room_ToAll | chat line; colour by `targetId` (below) |
 | 6 | Whisper | private chat line |
 | 8 | LobbyToAll | chat line |
 | 10 | Clan | clan chat line |
 
+- **Client 22 handler** (decompiled `0x7400`, `FUN_005edcd0`): it prints the **message field as-is**, so the `Nick>> ` prefix is whatever the sender wrote. The server therefore rebuilds it from the sender's real nickname before forwarding.
+- Room line colour (type 4, outside a match) by `targetId`: `999` yellow (system), `997`/`998` light blue (used for GM lines), anything else white. During a match lines use team colours.
+- The client reads at most 512 bytes per field. Its error-reply path (first field not `0`/`1`, e.g. `95040` + name) copies that string into a 128-byte buffer: never send long strings in chat error replies.
+- Server-side limits: text after `>>` at most 60 characters, target name at most 16, 5 messages per 5 s per player (a warning whisper instead of the 6th); a message without the `>>` marker is dropped.
 - System messages use type 4 with `targetId=999` and the `System>> ` prefix: yellow text, no popup.
 - **The `>>` marker is needed on every line**; without it the client renders only the last `<...>` token.
 - GM replies are whispers (type 6) with the recipient's sessionId/name in the target fields.
