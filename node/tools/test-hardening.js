@@ -402,6 +402,14 @@ const { users } = require('../game/state');
       ['0', '1', '1', '4', '0', '1', '0', '4', '0', '0', '0', '1240', '0', '0', String(x), '20', String(z), '4', '0', '9', '5', '0', 'DB01'], a, null);
     assert.strictEqual(hit(200, 300), null, 'impact 6000 units from the victim: dropped');
     assert.strictEqual(victim.health, 1000);
+
+    // after a teleport the attacker's hits are ignored until they respawn, even when they land on the victim
+    const { strike, markSpawn } = require('../game/anticheat');
+    strike(a, 'teleport', 'test');
+    assert.strictEqual(hit(5000, 5000), null, 'teleported: on-target hit dropped');
+    assert.strictEqual(victim.health, 1000);
+    markSpawn(a);
+    assert.ok(hit(5000, 5000), 'after respawn the hit counts');
     users.delete(601);
     users.delete(602);
   }

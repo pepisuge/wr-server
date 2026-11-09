@@ -53,6 +53,7 @@ function checkClock(u, tick, now = Date.now(), onStrike = strike) {
 function markSpawn(u) {
   const s = state(u);
   s.spawnAt = Date.now();
+  s.tainted = false;
   s.samples = [];
   s.heights = [];
   s.fall = null;
@@ -117,9 +118,16 @@ function checkMovement(u, pos, onStrike = strike) {
   return onStrike(u, 'speed', `${Math.round(speed)} u/s`);
 }
 
+// After a teleport or a superjump the player stands where no honest player can be (out of the map, on a roof): the
+// server has no map geometry to tell, so their hits are dropped until they respawn (gamesubs.js rejectHit). Live: shot
+// a bot from out of the map, 323 units away, every impact on the bot.
+const TAINTING = new Set(['teleport', 'superjump']);
+const isTainted = (u) => !!u.ac?.tainted;
+
 function strike(u, kind, detail) {
   const s = state(u);
   const now = Date.now();
+  if (TAINTING.has(kind)) s.tainted = true;
   if (now - (s.lastStrike[kind] || 0) < STRIKE_COOLDOWN_MS) return kind;
   s.lastStrike[kind] = now;
   s.strikes = s.strikes.filter((t) => now - t < STRIKE_WINDOW_MS);
@@ -133,4 +141,4 @@ function strike(u, kind, detail) {
   return kind;
 }
 
-module.exports = { checkMovement, checkClock, markSpawn, fallDamaged, strike, MAX_SPEED, TELEPORT };
+module.exports = { checkMovement, checkClock, markSpawn, fallDamaged, strike, isTainted, MAX_SPEED, TELEPORT };
