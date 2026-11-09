@@ -7,11 +7,14 @@ const { hashPassword, newScryptSalt, sameHash } = require('../auth/handlers');
 const clan = require('./clan');
 const { loadUserDetails } = require('./progression');
 const { webTokenUser } = require('./internal-client');
+const emblems = require('./emblems');
 
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
 const MAX_BODY = 4096;
 const USERNAME_RE = /^[A-Za-z0-9]{3,20}$/; // users.username varchar(20); the login accepts only alphanumerics
 const NICKNAME_RE = /^[A-Za-z0-9]{3,16}$/; // same rule as the in-game rename (shop.js)
+// In game the lobby user list is re-sent at once; players without the clan UI DLL see it after restarting the game.
+const EMBLEM_CHANGED = 'Emblem changed. In game it shows in a few seconds (with the clan UI mod; otherwise after restarting the game).';
 const RANK_NAME = { 0: 'Member', 1: 'Officer', 2: 'Master', 9: 'Applicant' };
 
 const sessions = new Map(); // token -> { userId, username, displayname, csrf, expires }
@@ -54,7 +57,9 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:5px 6px;
 input{background:#151617;color:#ECECEC;border:1px solid #55585A;padding:5px;width:220px}label{display:block;color:#A3A6A8;margin:8px 0 3px}
 button{background:#303132;color:#ECECEC;border:1px solid #55585A;padding:5px 12px;cursor:pointer}button:hover{border-color:#F2B01E}
 .inline{display:inline;margin:0}.inline button{padding:2px 8px;margin-left:4px}.danger{border-color:#E5533D}
-.err{color:#E5533D}.ok{color:#E8912D}.muted{color:#A3A6A8}`;
+.err{color:#E5533D}.ok{color:#E8912D}.muted{color:#A3A6A8}
+.emblem{width:32px;height:32px;vertical-align:middle;-ms-interpolation-mode:nearest-neighbor;image-rendering:pixelated;border:1px solid #55585A}
+.big{width:48px;height:48px}.gallery label{display:inline-block;margin:4px 6px 4px 0;color:#ECECEC}.gallery input{width:auto}`;
 
 function send(res, status, html, headers = {}) {
   res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'X-Frame-Options': 'DENY', ...headers });
@@ -155,13 +160,21 @@ function signIn(res, userId, username, displayname) {
   redirect(res, '/clan', { 'Set-Cookie': `wr_s=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_MS / 1000}` });
 }
 
+// Same order and points as the in-game clan ranking (clanExp: win 1000, draw 500, loss 250).
 async function clansPage(res, s) {
-  const list = [...clan.clans.values()].sort((a, b) => b.wins - a.wins || a.name.localeCompare(b.name));
+  const list = [...clan.clans.values()].sort((a, b) => clan.clanExp(b) - clan.clanExp(a) || a.name.localeCompare(b.name));
   const names = await clan.resolveDisplaynames(list.map((c) => c.master));
   const rows = list
-    .map((c) => `<tr><td>${esc(c.name)}</td><td>${esc(names.get(c.master) || '??')}</td><td>${c.members}/${clan.MAX_MEMBERS}</td><td>${c.wins}/${c.losses}</td></tr>`)
+    .map((c, i) => `<tr><td>${i + 1}</td><td>${emblemImg(c)} ${esc(c.name)}</td><td>${esc(names.get(c.master) || '??')}</td><td>${c.members}/${clan.MAX_MEMBERS}</td><td>${c.wins}/${c.draws}/${c.losses}</td><td>${clan.clanExp(c)}</td></tr>`)
     .join('');
-  send(res, 200, page('Clans', `<div class="box"><table><tr><th>Clan</th><th>Master</th><th>Members</th><th>W/L</th></tr>${rows || '<tr><td colspan="4" class="muted">No clans yet.</td></tr>'}</table></div>`, s));
+  send(res, 200, page('Clan ranking', `<div class="box"><table><tr><th>#</th><th>Clan</th><th>Master</th><th>Members</th><th>W/D/L</th><th>Points</th></tr>${rows || '<tr><td colspan="6" class="muted">No clans yet.</td></tr>'}</table>
+<p class="muted">Clan wars: win 1000 points, draw 500, loss 250. A war counts when both clans have players at the start of the match.</p></div>`, s));
+}
+
+// Versioned by content so browsers (and the game's IE) refetch after a change.
+function emblemImg(c, cls = 'emblem') {
+  const v = crypto.createHash('md5').update(emblems.clanEmblem(c).data).digest('hex').slice(0, 8);
+  return `<img class="${cls}" src="/avatar/${c.id}.jpg?v=${v}" alt="">`;
 }
 
 // A new account has no game row until its first game login; create it here so the site works right after sign-up.
@@ -197,21 +210,37 @@ async function clanPage(res, db, s, notice) {
   const tr = (r, buttons) => `<tr><td>${esc(names.get(r.id) || '??')}</td><td>${RANK_NAME[r.clanrank]}</td><td>${r.xp}</td><td>${buttons}</td></tr>`;
   const members = rows.filter((r) => r.clanrank !== clan.RANK.PENDING);
   const pending = rows.filter((r) => r.clanrank === clan.RANK.PENDING);
+  const isMaster = u.clanRank === clan.RANK.MASTER;
+  // Officers may only kick plain members; everything else is the master's (clan.js rankAction).
   const memberButtons = (r) => {
     if (!boss || r.id === u.id || r.clanrank === clan.RANK.MASTER) return '';
+    if (!isMaster) return r.clanrank === clan.RANK.MEMBER ? act(s, 'kick', 'Kick', target(r.id), 'danger') : '';
     return (r.clanrank === clan.RANK.MEMBER ? act(s, 'officer', 'Officer', target(r.id)) : act(s, 'demote', 'Demote', target(r.id))) +
-      act(s, 'kick', 'Kick', target(r.id), 'danger') +
-      (u.clanRank === clan.RANK.MASTER ? act(s, 'master', 'Make master', target(r.id)) : '');
+      act(s, 'kick', 'Kick', target(r.id), 'danger') + act(s, 'master', 'Make master', target(r.id));
   };
 
-  body += `<div class="box"><p><b>${esc(c.name)}</b> &middot; ${c.members}/${clan.MAX_MEMBERS} members &middot; W/L ${c.wins}/${c.losses} &middot; you are ${RANK_NAME[u.clanRank]}</p>
+  body += `<div class="box"><p>${emblemImg(c, 'emblem big')} <b>${esc(c.name)}</b> &middot; ${c.members}/${clan.MAX_MEMBERS} members &middot; W/D/L ${c.wins}/${c.draws}/${c.losses} &middot; ${clan.clanExp(c)} points &middot; you are ${RANK_NAME[u.clanRank]}</p>
 <table><tr><th>Name</th><th>Rank</th><th>XP</th><th></th></tr>${members.map((r) => tr(r, memberButtons(r))).join('')}</table></div>`;
   if (boss) {
     body += `<div class="box"><h1>Applicants</h1>${pending.length
       ? `<table><tr><th>Name</th><th>Rank</th><th>XP</th><th></th></tr>${pending
         .map((r) => tr(r, act(s, 'accept', 'Accept', target(r.id)) + act(s, 'refuse', 'Refuse', target(r.id), 'danger')))
         .join('')}</table>`
-      : '<p class="muted">No applications. Players apply from their own Clan page (or in game); they show up here to accept or refuse. Once in, each member gets buttons here: Officer/Demote, Kick and, for the master, Make master.</p>'}</div>`;
+      : `<p class="muted">No applications. Players apply from their own Clan page (or in game); they show up here to accept or refuse.${isMaster ? ' Members get buttons in the list above: Officer/Demote, Kick, Make master.' : ' Officers can kick members; ranks are up to the master.'}</p>`}</div>`;
+    const rivals = [...clan.clans.values()].filter((x) => x.id !== c.id);
+    body += `<div class="box"><h1>Clan war</h1><p class="muted">Be in a game lobby (not in a room), then declare: a war room is created for you in your channel and both clans get a notice. Each clan plays on its own side.</p>
+<table><tr><th>Clan</th><th>W/D/L</th><th></th></tr>${rivals
+      .map((x) => `<tr><td>${emblemImg(x)} ${esc(x.name)}</td><td>${x.wins}/${x.draws}/${x.losses}</td><td>${act(s, 'war', 'Declare war', `<input type="hidden" name="clan" value="${x.id}">`, 'danger')}</td></tr>`)
+      .join('') || '<tr><td colspan="3" class="muted">No other clans yet.</td></tr>'}</table></div>`;
+  }
+  if (isMaster) {
+    const current = /^g(\d+)$/.exec(c.emblem || '');
+    const radios = Array.from({ length: emblems.GALLERY_SIZE }, (_, n) =>
+      `<label><input type="radio" name="emblem" value="g${n}"${current && Number(current[1]) === n ? ' checked' : ''}> <img class="emblem" src="/emblem/g${n}.bmp" alt=""></label>`).join('');
+    body += `<div class="box gallery"><h1>Emblem</h1>${form('/clan', `<input type="hidden" name="action" value="emblem">${radios}`, 'Use this emblem', s.csrf)}
+<form method="post" action="/clan/emblem" enctype="multipart/form-data"><input type="hidden" name="csrf" value="${s.csrf}">
+<label for="file">Or upload your own: PNG, JPEG or BMP, up to ${emblems.MAX_UPLOAD / 1024} KB, 32x32 looks best</label><input id="file" name="file" type="file" accept="image/png,image/jpeg,image/bmp">
+<p><button>Upload</button></p></form></div>`;
   }
   body += `<div class="box">${u.clanRank === clan.RANK.MASTER ? act(s, 'disband', 'Disband the clan', '', 'danger') + ' <span class="muted">Hand the clan to someone else first if you want to leave it.</span>' : act(s, 'leave', 'Leave the clan', '', 'danger')}</div>`;
   send(res, 200, page('Clan', body, s));
@@ -234,10 +263,61 @@ async function clanAction(req, res, db, s) {
     demote: () => clan.rankAction(db, u, 1, target),
     kick: () => clan.rankAction(db, u, 2, target),
     master: () => clan.promote(db, u, target),
+    war: () => clan.declareWar(u, Number(b.get('clan'))).error,
+    emblem: () => {
+      const e = b.get('emblem') || '';
+      return /^g\d+$/.test(e) && Number(e.slice(1)) < emblems.GALLERY_SIZE ? clan.setEmblem(db, u, e) : 'Pick an emblem.';
+    },
   };
   const run = actions[b.get('action')];
   const err = run ? await run() : 'Unknown action.';
-  clanPage(res, db, s, { text: err || 'Done.', ok: !err });
+  clanPage(res, db, s, { text: err || (b.get('action') === 'emblem' ? EMBLEM_CHANGED : 'Done.'), ok: !err });
+}
+
+function readRaw(req, max) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > max) return reject(new Error('body too large'));
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+// Minimal multipart/form-data reader for the emblem form: { fieldName: Buffer }.
+function parseMultipart(body, contentType) {
+  const m = /boundary=(?:"([^"]+)"|([^;]+))/.exec(contentType || '');
+  if (!m) return {};
+  const sep = Buffer.from(`--${m[1] || m[2]}`);
+  const parts = {};
+  let start = body.indexOf(sep);
+  while (start !== -1) {
+    const next = body.indexOf(sep, start + sep.length);
+    if (next === -1) break;
+    const part = body.subarray(start + sep.length + 2, next - 2); // drop the CRLFs around the part
+    const headEnd = part.indexOf('\r\n\r\n');
+    const name = headEnd !== -1 && /name="([^"]*)"/.exec(part.subarray(0, headEnd).toString('latin1'));
+    if (name) parts[name[1]] = part.subarray(headEnd + 4);
+    start = next;
+  }
+  return parts;
+}
+
+async function uploadEmblem(req, res, db, s) {
+  let parts;
+  try {
+    parts = parseMultipart(await readRaw(req, emblems.MAX_UPLOAD + 4096), req.headers['content-type']);
+  } catch {
+    return clanPage(res, db, s, { text: `The image must be at most ${emblems.MAX_UPLOAD / 1024} KB.` });
+  }
+  if (String(parts.csrf || '') !== s.csrf) return clanPage(res, db, s, { text: 'Session expired, try again.' });
+  const u = await player(db, s);
+  const err = emblems.checkUpload(parts.file) || clan.setEmblem(db, u, 'u', Buffer.from(parts.file));
+  clanPage(res, db, s, { text: err || EMBLEM_CHANGED, ok: !err });
 }
 
 async function route(req, res, db, authDb) {
@@ -268,56 +348,35 @@ async function route(req, res, db, authDb) {
     if (!s) return redirect(res, '/login');
     return post ? clanAction(req, res, db, s) : clanPage(res, db, s);
   }
+  if (path === '/clan/emblem' && post) {
+    if (!s) return redirect(res, '/login');
+    return uploadEmblem(req, res, db, s);
+  }
+  const gallery = /^\/emblem\/g(\d+)\.bmp$/.exec(path);
+  if (gallery && !post && Number(gallery[1]) < emblems.GALLERY_SIZE) {
+    res.writeHead(200, { 'Content-Type': 'image/bmp', 'Cache-Control': 'max-age=86400' });
+    return res.end(emblems.galleryEmblem(Number(gallery[1])));
+  }
   // Lobby user list emblems: the client fetches <id>.crc, and <id>.jpg only when the crc text changed (cached in
   // texture/Avata). Unknown clan: 404, so the client falls back to DefaultClanMark.jpg.
   const avatar = /^\/avatar\/(\d+)\.(jpg|crc)$/.exec(path);
   if (avatar && !post) {
     const c = clan.clans.get(Number(avatar[1]));
     if (!c) return send(res, 404, 'no such clan');
-    const img = emblem(c.name);
-    res.writeHead(200, { 'Content-Type': avatar[2] === 'crc' ? 'text/plain' : 'image/bmp', 'Cache-Control': 'no-cache' });
-    return res.end(avatar[2] === 'crc' ? crypto.createHash('md5').update(img).digest('hex') : img);
+    const img = emblems.clanEmblem(c);
+    res.writeHead(200, { 'Content-Type': avatar[2] === 'crc' ? 'text/plain' : img.type, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
+    return res.end(avatar[2] === 'crc' ? crypto.createHash('md5').update(img.data).digest('hex') : img.data);
   }
   if (path === '/ClanAvatar.aspx' && !post) {
-    const name = new URLSearchParams(req.url.split('?')[1] || '').get('Clan') || '';
-    console.log(`web: clan emblem for "${name.slice(0, 40)}"`);
-    res.writeHead(200, { 'Content-Type': 'image/bmp', 'Cache-Control': 'max-age=3600' });
-    return res.end(emblem(name));
+    // Clan war rooms (client 22 code at 0x4cd620) ask by name.
+    const name = (new URLSearchParams(req.url.split('?')[1] || '').get('Clan') || '').toLowerCase();
+    const c = [...clan.clans.values()].find((x) => x.name.toLowerCase() === name);
+    if (!c) return send(res, 404, 'no such clan');
+    const img = emblems.clanEmblem(c);
+    res.writeHead(200, { 'Content-Type': img.type, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
+    return res.end(img.data);
   }
   send(res, 404, page('Not found', '<div class="box"><p><a href="/">Home</a></p></div>', s));
-}
-
-// Clan emblem for the game client (it downloads `ClanAvatar.aspx?Clan=<name>` into a .jpg but loads it through
-// Direct3D, which reads any format): a shield in a colour picked from the name, on dark grey. 32x32 24-bit BMP,
-// so no image library is needed. Uploaded emblems can replace this later.
-function emblem(name) {
-  const S = 32;
-  const hash = crypto.createHash('md5').update(name.toLowerCase()).digest();
-  const colour = [hash[0], hash[1], hash[2]].map((v) => 80 + (v % 160)); // never too dark on the grey
-  const rowSize = S * 3; // 96, already a multiple of 4
-  const buf = Buffer.alloc(54 + rowSize * S);
-  buf.write('BM', 0);
-  buf.writeUInt32LE(buf.length, 2);
-  buf.writeUInt32LE(54, 10);
-  buf.writeUInt32LE(40, 14);
-  buf.writeInt32LE(S, 18);
-  buf.writeInt32LE(S, 22); // bottom-up rows
-  buf.writeUInt16LE(1, 26);
-  buf.writeUInt16LE(24, 28);
-  for (let y = 0; y < S; y++) {
-    for (let x = 0; x < S; x++) {
-      const top = S - 1 - y; // distance from the top edge
-      const dx = Math.abs(x - 15.5);
-      // shield: straight sides down to 60%, then a point at the bottom
-      const inShield = top >= 4 && top <= 28 && dx <= 11 && (top < 18 || dx <= (28 - top) * 1.1);
-      const rgb = inShield ? colour : [48, 50, 52];
-      const o = 54 + y * rowSize + x * 3;
-      buf[o] = rgb[2];
-      buf[o + 1] = rgb[1];
-      buf[o + 2] = rgb[0];
-    }
-  }
-  return buf;
 }
 
 function startWeb(db, authDb, port) {

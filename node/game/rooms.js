@@ -217,6 +217,7 @@ function handleRoomCreation(socket, pkt) {
   u.roomId = id;
 
   socket.sendPacket(ROOM_CREATION, [1, 0, ...roomInfoFields(room)]);
+  sendRoomPlayers([socket], [...room.players.values()]); // own entry too: the client loads clan emblems only from PLAYER_INFO
   sendRoomUpdateToLobby(room, false);
 }
 
@@ -277,6 +278,7 @@ function createClanWarRoom(challenger, opponentClanId) {
   challenger.roomId = id;
 
   challenger.socket.sendPacket(ROOM_CREATION, [1, 0, ...roomInfoFields(room)]);
+  sendRoomPlayers([challenger.socket], [...room.players.values()]);
   sendRoomUpdateToLobby(room, false);
   return room;
 }
@@ -423,8 +425,8 @@ function handleRoomJoin(socket, pkt) {
   u.roomId = room.id;
 
   socket.sendPacket(ROOM_JOIN, [1, slot, ...roomInfoFields(room)]);
-  const others = [...room.players.values()].filter((p) => p.sessionId !== u.sessionId);
-  sendRoomPlayers([socket], others);
+  // Everyone, the newcomer included: the client loads clan emblems (its own too) only from PLAYER_INFO entries.
+  sendRoomPlayers([socket], [...room.players.values()]);
   sendRoomUpdateToLobby(room, true);
 }
 

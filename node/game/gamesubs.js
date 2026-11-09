@@ -311,6 +311,8 @@ function handleModeUpdate(room, player, payload) {
   if (player.slot !== room.master || room.state !== 1) return null;
   const mode = Number(payload[2]); // client 22: payload[0] is always 1, the chosen mode is at [2] (live: Explosive sent [1,0,0], FFA [1,0,1])
   if (![EXPLOSIVE_MODE, FFA_MODE, TDM_MODE].includes(mode)) return null;
+  // Clan wars are team modes only: in FFA clanmates shoot each other and those kills still counted for the clan.
+  if (room.isClanWar > 0 && mode === FFA_MODE) return null;
   room.mode = mode;
   return { payload, updateLobby: true };
 }
