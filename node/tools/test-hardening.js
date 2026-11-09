@@ -365,6 +365,28 @@ const { users } = require('../game/state');
     assert.deepStrictEqual(flags, [], 'normal jump');
     checkMovement(hopper, { x: 0, h: 800, z: 0, t: 300440 }, onStrike);
     assert.deepStrictEqual(flags, ['superjump'], 'superjump');
+
+    // no fall damage: a long fall that lands needs the client's fall-damage report within 1.5 s
+    const { fallDamaged } = require('../game/anticheat');
+    const fall = (u, report) => {
+      flags.length = 0;
+      const hs = [700, 650, 500, 300, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+      hs.forEach((h, i) => {
+        if (report && i === 7) fallDamaged(u);
+        checkMovement(u, { x: 0, h, z: 0, t: 400000 + i * 110 }, onStrike);
+      });
+    };
+    fall({ channel: 1 }, true);
+    assert.deepStrictEqual(flags, [], 'fall with damage reported');
+    fall({ channel: 1 }, false);
+    assert.deepStrictEqual(flags, ['nofall'], 'fall without damage');
+
+    // teleport straight down under the map (OPK hiding) counts too
+    flags.length = 0;
+    const diver = { channel: 1 };
+    checkMovement(diver, { x: 0, h: 0, z: 0, t: 500000 }, onStrike);
+    checkMovement(diver, { x: 0, h: -3000, z: 0, t: 500110 }, onStrike);
+    assert.deepStrictEqual(flags, ['teleport'], 'under the map');
   }
 
   // OPK: a hit whose impact point is far from where the victim says it is gets dropped

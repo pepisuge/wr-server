@@ -9,7 +9,7 @@ const { initExplosiveMatch } = require('./explosive');
 const { broadcastSystemMessage } = require('./chat');
 const { getItem, codeById, DEFAULT_ITEMS } = require('./items');
 const { ownsItem } = require('./inventory');
-const { markSpawn, strike } = require('./anticheat');
+const { markSpawn, fallDamaged, strike } = require('./anticheat');
 const { record } = require('./record');
 
 const GAME_PACKET = 0x7530;
@@ -482,9 +482,9 @@ const POS_MAX_AGE_MS = 1000;
 
 // OPK ("one position kill") cheats draw enemies where the cheater wants them and hit them there: the impact point the
 // client reports (payload[14..16]) is then far from where the victim itself says it is. Real hits land on the victim,
-// up to frame lag. ponytail: 1000 units until live data narrows it; (0,0,0) = no impact point (the test bot) is skipped,
+// up to frame lag (live: 10-350 units on a fast bot); (0,0,0) = no impact point (the test bot) is skipped,
 // tighten once the bot sends real ones.
-const OPK_RANGE = 1000;
+const OPK_RANGE = 700; // live honest hits on a fast, collision-free bot: up to ~350
 
 function rejectHit(player, u, weapon, victim, now = Date.now(), impact = null) {
   if (!u.equipment?.[player.class]?.includes(weapon)) return 'weapon not in loadout';
@@ -730,6 +730,7 @@ function handleSuicide(room, player, payload, u, db) {
 // broadcast as a Suicide (157) with the slot in [2], like the reference. Vehicle damage is skipped: no vehicles yet.
 function handleEnvironmentDamage(room, player, payload, u, db) {
   if (room.state !== 2 || !player.alive || Number(payload[2]) !== 1) return null;
+  fallDamaged(u);
   const damage = Number(payload[5]);
   if (!(damage > 0)) return null;
 

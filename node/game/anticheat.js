@@ -15,6 +15,9 @@ const STRIKE_COOLDOWN_MS = 3000; // one strike per kind per 3 s, so one burst is
 const CQC = 1;
 
 const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+const dist3 = (a, b) => Math.hypot(a.x - b.x, a.h - b.h, a.z - b.z); // teleports include dropping under the map (OPK)
+const FALL_DAMAGE_DROP = 600; // a landing after a fall this high always reported fall damage (live: superjump landings)
+const FALL_DAMAGE_WAIT_MS = 1500;
 
 function state(u) {
   if (!u.ac) u.ac = { samples: [], strikes: [], lastStrike: {}, spawnAt: 0 };
@@ -51,6 +54,31 @@ function markSpawn(u) {
   const s = state(u);
   s.spawnAt = Date.now();
   s.samples = [];
+  s.heights = [];
+  s.fall = null;
+}
+
+// The client computes fall damage itself and reports it (EnvironmentDamage, gamesubs.js): "no fall damage" cheats just
+// don't. After a long fall that ends on the ground, that report must follow; called when it arrives.
+function fallDamaged(u) {
+  state(u).fall = null;
+}
+
+function checkFall(u, s, pos, onStrike) {
+  if (s.fall && pos.t - s.fall.at > FALL_DAMAGE_WAIT_MS) {
+    const drop = s.fall.drop;
+    s.fall = null;
+    return onStrike(u, 'nofall', `landed after ${drop} units without fall damage`);
+  }
+  s.heights = (s.heights || []).filter((p) => pos.t - p.t < 3000);
+  const prev = s.heights[s.heights.length - 1];
+  s.heights.push(pos);
+  const peak = Math.max(...s.heights.map((p) => p.h));
+  if (!s.fall && prev && peak - pos.h > FALL_DAMAGE_DROP && Math.abs(pos.h - prev.h) < 2) {
+    s.fall = { at: pos.t, drop: Math.round(peak - pos.h) }; // landed: height stopped changing
+    s.heights = [pos];
+  }
+  return null;
 }
 
 // Returns the violation found (for tests and logs), or null.
@@ -64,10 +92,13 @@ function checkMovement(u, pos, onStrike = strike) {
   const last = s.samples[s.samples.length - 1];
   if (last && pos.t - last.t < MIN_SAMPLE_MS) return null;
 
-  if (last && pos.t - last.t < 1000 && dist(last, pos) > TELEPORT) {
+  if (last && pos.t - last.t < 1000 && dist3(last, pos) > TELEPORT) {
     s.samples = [pos];
-    return onStrike(u, 'teleport', `${Math.round(dist(last, pos))} units in ${pos.t - last.t} ms`);
+    s.heights = [pos];
+    return onStrike(u, 'teleport', `${Math.round(dist3(last, pos))} units in ${pos.t - last.t} ms`);
   }
+  const fell = checkFall(u, s, pos, onStrike);
+  if (fell) return fell;
   s.samples.push(pos);
   while (s.samples.length > 1 && pos.t - s.samples[0].t > WINDOW_MS) s.samples.shift();
   const rise = pos.h - Math.min(...s.samples.map((p) => p.h));
@@ -102,4 +133,4 @@ function strike(u, kind, detail) {
   return kind;
 }
 
-module.exports = { checkMovement, checkClock, markSpawn, strike, MAX_SPEED, TELEPORT };
+module.exports = { checkMovement, checkClock, markSpawn, fallDamaged, strike, MAX_SPEED, TELEPORT };
