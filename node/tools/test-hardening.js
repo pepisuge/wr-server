@@ -406,6 +406,26 @@ const { users } = require('../game/state');
     users.delete(602);
   }
 
+  // GM /takemaster, /setmaster: master moves, announced as a "leave" of an empty slot; impossible in a full room
+  {
+    const { setMaster } = require('../game/rooms');
+    const { xorBuffer } = require('../lib/packet');
+    const sent = [];
+    const mk = (sid) => ({ id: sid, sessionId: sid, socket: { write: (b) => sent.push(xorBuffer(b, 0x96).toString('utf8')) } });
+    users.set(801, mk(801)).set(802, mk(802));
+    const room = { id: 9, maxPlayers: 4, master: 0, players: new Map([[801, { sessionId: 801, slot: 0 }], [802, { sessionId: 802, slot: 2, ready: false }]]) };
+    assert.ok(setMaster(room, room.players.get(802)));
+    assert.strictEqual(room.master, 2);
+    assert.ok(room.players.get(802).ready, 'new master is ready');
+    assert.ok(sent.length === 2 && sent[0].includes(' 29504 1 -1 3 2 2 '), 'leave of empty slot 3 with master 2');
+    room.maxPlayers = 3;
+    room.players.set(803, { sessionId: 803, slot: 1 });
+    room.players.set(804, { sessionId: 804, slot: 2 });
+    assert.strictEqual(setMaster(room, room.players.get(801)), false, 'full room');
+    users.delete(801);
+    users.delete(802);
+  }
+
   // Bans: a temporary one is lifted after ban_until, a running or permanent one holds
   {
     const { isBanned } = require('../auth/handlers');

@@ -7,7 +7,7 @@
 // to grant GM powers safely.
 const { users, getChannel, roomSockets } = require('./state');
 const { xpForLevel, levelForXp } = require('./progression');
-const { handleRoomSpectate, removeFromRoom, notifyLobbyAfterLeave, sendRoomUpdateToLobby, ROOM_LEAVE, ROOM_KICK } = require('./rooms');
+const { handleRoomSpectate, removeFromRoom, notifyLobbyAfterLeave, sendRoomUpdateToLobby, setMaster, ROOM_LEAVE, ROOM_KICK } = require('./rooms');
 const { endRound } = require('./roundtimer');
 const { getMap } = require('./maps');
 const { grantItem } = require('./shop');
@@ -455,17 +455,42 @@ async function cmdForceCloseRoom(socket, db, args) {
 // Ported from ToXiiC-Core's "endgame" - forces the current match to end,
 // same payout/reset path a real win condition takes (roundtimer.js).
 // Starts the match of the GM's own room as if its master had pressed Start (same checks: everyone ready, 2+ players,
-// balanced teams). Lazy require: gamesubs.js loads rooms.js, which this module also needs.
-function cmdStart(socket, db) {
-  const { HANDLERS, SUB, GAME_PACKET } = require('./gamesubs');
+// balanced teams); "/start force" skips them. Lazy require: gamesubs.js loads rooms.js, which this module also needs.
+function cmdStart(socket, db, args) {
+  const { HANDLERS, SUB, GAME_PACKET, beginMatch } = require('./gamesubs');
   const u = socket.user;
   const room = u.roomId === null ? null : getChannel(u.channel).rooms.get(u.roomId);
   if (!room || room.state !== 1) return reply(socket, 'Devi essere in una stanza in attesa.');
   const master = [...room.players.values()].find((p) => p.slot === room.master);
-  const r = master && HANDLERS[SUB.START](room, master, [0, 0, 0], u, db);
-  if (!r) return reply(socket, 'Impossibile avviare: servono 2+ giocatori pronti e squadre bilanciate.');
+  if (!master) return reply(socket, 'La stanza non ha un master.');
+  let r;
+  if ((args[0] || '').toLowerCase() === 'force') {
+    beginMatch(room, db);
+    r = { newType: SUB.START_REPLY, payload: [0, 0, room.map] }; // what the Start handler replies
+  } else {
+    r = HANDLERS[SUB.START](room, master, [0, 0, 0], u, db);
+    if (!r) return reply(socket, 'Non tutti pronti o squadre sbilanciate. /start force per avviare comunque.');
+  }
   broadcastPacket(roomSockets(room), XOR.external, GAME_PACKET, [1, master.slot, room.id, 2, r.newType, ...r.payload]);
   sendRoomUpdateToLobby(room, true);
+}
+
+// The GM becomes master of the room they are in, or makes another player in a room its master (rooms.js setMaster).
+function cmdTakeMaster(socket) {
+  const u = socket.user;
+  const room = u.roomId === null ? null : getChannel(u.channel).rooms.get(u.roomId);
+  if (!room) return reply(socket, 'Devi essere in una stanza.');
+  if (!setMaster(room, room.players.get(u.sessionId))) return reply(socket, 'Stanza piena: nessuno slot libero per annunciarlo.');
+  reply(socket, 'Ora sei il master della stanza.');
+}
+
+function cmdSetMaster(socket, db, args) {
+  const target = resolveTarget(args[0]);
+  const t = target?.online;
+  const room = t && t.roomId !== null ? getChannel(t.channel).rooms.get(t.roomId) : null;
+  if (!room) return reply(socket, 'Uso: /setmaster <giocatore in una stanza>');
+  if (!setMaster(room, room.players.get(t.sessionId))) return reply(socket, 'Stanza piena: nessuno slot libero per annunciarlo.');
+  reply(socket, `${t.displayname} ora è il master della stanza ${room.id}.`);
 }
 
 function cmdEndGame(socket, db, args) {
@@ -537,7 +562,9 @@ const HELP_COMMANDS = [
   '/roominfo <id>',
   '/spectate <id stanza>',
   '/closeroom <id>',
-  '/start',
+  '/start [force]',
+  '/takemaster',
+  '/setmaster <giocatore>',
   '/endgame',
   '/extendtime <minuti>',
   '/online',
@@ -569,6 +596,8 @@ const COMMANDS = {
   spectate: cmdSpectate,
   closeroom: cmdForceCloseRoom,
   start: cmdStart,
+  takemaster: cmdTakeMaster,
+  setmaster: cmdSetMaster,
   endgame: cmdEndGame,
   extendtime: cmdExtendTime,
   online: cmdWho,

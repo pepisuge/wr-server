@@ -970,4 +970,4 @@ function handleGamePacket(socket, pkt, db) {
   if (result.checkAutoStart) tryAutoStart(room);
 }
 
-module.exports = { handleGamePacket, GAME_PACKET, handleScoreboardRequest, SCOREBOARD, HANDLERS, SUB };
+module.exports = { handleGamePacket, GAME_PACKET, handleScoreboardRequest, SCOREBOARD, HANDLERS, SUB, beginMatch };
