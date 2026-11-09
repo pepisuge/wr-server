@@ -5,14 +5,12 @@
 // any client-supplied field - the client's own Authorization packet carries
 // an AccessLevel byte, but nothing here validates it, so it can't be used
 // to grant GM powers safely.
-const { users, getChannel, roomSockets } = require('./state');
+const { users, getChannel } = require('./state');
 const { xpForLevel, levelForXp } = require('./progression');
-const { handleRoomSpectate, removeFromRoom, notifyLobbyAfterLeave, sendRoomUpdateToLobby, ROOM_LEAVE, ROOM_KICK } = require('./rooms');
+const { handleRoomSpectate, removeFromRoom, notifyLobbyAfterLeave, setMaster, ROOM_LEAVE, ROOM_KICK } = require('./rooms');
 const { endRound } = require('./roundtimer');
-const { getMap, listMaps } = require('./maps');
+const { getMap } = require('./maps');
 const { grantItem } = require('./shop');
-const { broadcastPacket } = require('../lib/xor-socket');
-const { XOR } = require('../lib/constants');
 
 // Bans/unbans live on the AUTH db (masterserver.users.status, the same
 // column auth/handlers.js already checks at login - status<=0 blocks entry)
@@ -303,7 +301,7 @@ async function cmdBan(socket, db, args) {
   const reason = args.slice(1).join(' ');
   if (!target) return reply(socket, 'Uso: /ban <giocatore|id> [motivo]');
 
-  const [result] = await authDb.query('UPDATE users SET status = 0 WHERE id = ?', [target.id]);
+  const [result] = await authDb.query('UPDATE users SET status = 0, ban_until = 0 WHERE id = ?', [target.id]);
   if (result.affectedRows === 0) return reply(socket, `Nessun account con id ${target.id}.`);
   if (target.online) {
     reply(target.online.socket, `Sei stato bannato.${reason ? ` Motivo: ${reason}` : ''}`);
@@ -317,9 +315,41 @@ async function cmdUnban(socket, db, args) {
   const target = resolveTarget(args[0]);
   if (!target) return reply(socket, 'Uso: /unban <giocatore|id>');
 
-  const [result] = await authDb.query('UPDATE users SET status = 1 WHERE id = ?', [target.id]);
+  const [result] = await authDb.query('UPDATE users SET status = 1, ban_until = 0 WHERE id = ?', [target.id]);
   if (result.affectedRows === 0) return reply(socket, `Nessun account con id ${target.id}.`);
   reply(socket, `Account ${target.id} sbannato.`);
+}
+
+// Temporary ban: the same status=0 as /ban plus users.ban_until (sql/11); auth/handlers.js lifts it at the first login
+// after that time.
+async function cmdTempBan(socket, db, args) {
+  if (!authDb) return reply(socket, 'Ban non disponibile: auth DB non collegato.');
+  const target = resolveTarget(args[0]);
+  const hours = Number(args[1]);
+  const reason = args.slice(2).join(' ');
+  if (!target || !(hours > 0)) return reply(socket, 'Uso: /tempban <giocatore|id> <ore> [motivo]');
+
+  const until = Math.floor(Date.now() / 1000) + Math.round(hours * 3600);
+  const [result] = await authDb.query('UPDATE users SET status = 0, ban_until = ? WHERE id = ?', [until, target.id]);
+  if (result.affectedRows === 0) return reply(socket, `Nessun account con id ${target.id}.`);
+  if (target.online) {
+    reply(target.online.socket, `Sei stato bannato per ${hours} ore.${reason ? ` Motivo: ${reason}` : ''}`);
+    target.online.socket.end();
+  }
+  reply(socket, `Account ${target.online ? target.online.displayname : target.id} bannato per ${hours} ore.${reason ? ` (${reason})` : ''}`);
+}
+
+// Recent anticheat strikes of an online player (anticheat.js keeps the last 10 per session).
+function cmdStrikes(socket, db, args) {
+  const target = resolveTarget(args[0]);
+  if (!target?.online) return reply(socket, 'Uso: /strikes <giocatore online>');
+  const history = target.online.ac?.history || [];
+  if (!history.length) return reply(socket, `${target.online.displayname}: nessuna violazione in questa sessione.`);
+  const now = Date.now();
+  replyLines(socket, [
+    `${target.online.displayname}: ${history.length} violazioni`,
+    ...history.map((h) => `${Math.round((now - h.t) / 60000)}min fa ${h.kind}: ${h.detail}`.slice(0, MAX_CHAT_LINE)),
+  ]);
 }
 
 // /giveitem, /giveroom: reuse shop.js's own grantItem(db, u, code, days) -
@@ -386,7 +416,7 @@ function cmdRoomInfo(socket, db, args) {
 
   reply(
     socket,
-    `#${room.id} "${room.name}" stato=${room.state === 2 ? 'Playing' : 'Waiting'} modo=${room.mode} mappa=${room.map} ` +
+    `#${room.id} "${room.name}" stato=${room.state === 2 ? 'Playing' : 'Waiting'} modo=${room.mode} mappa=${room.map} (${getMap(room.map)?.name || '?'}) ` +
       `master(slot)=${room.master} giocatori=${room.players.size}/${room.maxPlayers} password=${room.hasPassword ? 'si' : 'no'} ` +
       `lock=${room.userLimit ? 'si' : 'no'} autostart=${room.autoStart ? 'si' : 'no'}`
   );
@@ -420,44 +450,37 @@ async function cmdForceCloseRoom(socket, db, args) {
   reply(socket, `Stanza ${roomId} chiusa forzatamente (${memberIds.length} giocatori rimandati in lobby).`);
 }
 
-function cmdMaps(socket) {
-  const items = listMaps().map((m) => `${m.id}=${m.name}`);
-  replyLines(socket, packItems(items, MAX_CHAT_LINE, ', '));
-}
-
-// Ported from ToXiiC-Core's "map" - only while the room hasn't started a
-// match yet (same gating the reference itself uses). ToXiiC's own broadcast
-// of the change to the room screen is commented out in that source (left
-// unconfirmed even there) - only the lobby list is refreshed here, same as
-// any other room-setting change (sendRoomUpdateToLobby).
-function cmdChangeMap(socket, db, args) {
-  const u = socket.user;
-  const mapId = Number(args[0]);
-  if (u.roomId === null) return reply(socket, 'Devi essere in una stanza.');
-  const map = getMap(mapId);
-  if (!map) return reply(socket, `Mappa ${mapId} non trovata. Usa /maps per l'elenco.`);
-
-  const room = getChannel(u.channel).rooms.get(u.roomId);
-  if (room.state !== 1) return reply(socket, 'Non puoi cambiare mappa a partita in corso.');
-  room.map = mapId;
-  sendRoomUpdateToLobby(room, true);
-  reply(socket, `Mappa della stanza impostata a ${mapId} (${map.name}).`);
-}
-
 // Ported from ToXiiC-Core's "endgame" - forces the current match to end,
 // same payout/reset path a real win condition takes (roundtimer.js).
-// Starts the match of the GM's own room as if its master had pressed Start (same checks: everyone ready, 2+ players,
-// balanced teams). Lazy require: gamesubs.js loads rooms.js, which this module also needs.
-function cmdStart(socket, db) {
-  const { HANDLERS, SUB, GAME_PACKET } = require('./gamesubs');
+// The client only starts a match when IT sends Start (a server-pushed START_REPLY is ignored: live, here and in the
+// autostart attempts, gamesubs.js), so /start unlocks instead: the GM becomes master and the room's next Start skips the
+// ready/team-balance checks (gamesubs.js handleStart). The GM then presses Start in the client.
+function cmdStart(socket) {
   const u = socket.user;
   const room = u.roomId === null ? null : getChannel(u.channel).rooms.get(u.roomId);
   if (!room || room.state !== 1) return reply(socket, 'Devi essere in una stanza in attesa.');
-  const master = [...room.players.values()].find((p) => p.slot === room.master);
-  const r = master && HANDLERS[SUB.START](room, master, [0, 0, 0], u, db);
-  if (!r) return reply(socket, 'Impossibile avviare: servono 2+ giocatori pronti e squadre bilanciate.');
-  broadcastPacket(roomSockets(room), XOR.external, GAME_PACKET, [1, master.slot, room.id, 2, r.newType, ...r.payload]);
-  sendRoomUpdateToLobby(room, true);
+  const me = room.players.get(u.sessionId);
+  if (room.master !== me?.slot && !setMaster(room, me)) return reply(socket, 'Stanza piena: non posso renderti master.');
+  room.forceStart = true;
+  reply(socket, 'Avvio sbloccato: premi Start (niente controllo pronti/squadre).');
+}
+
+// The GM becomes master of the room they are in, or makes another player in a room its master (rooms.js setMaster).
+function cmdTakeMaster(socket) {
+  const u = socket.user;
+  const room = u.roomId === null ? null : getChannel(u.channel).rooms.get(u.roomId);
+  if (!room) return reply(socket, 'Devi essere in una stanza.');
+  if (!setMaster(room, room.players.get(u.sessionId))) return reply(socket, 'Stanza piena: nessuno slot libero per annunciarlo.');
+  reply(socket, 'Ora sei il master della stanza.');
+}
+
+function cmdSetMaster(socket, db, args) {
+  const target = resolveTarget(args[0]);
+  const t = target?.online;
+  const room = t && t.roomId !== null ? getChannel(t.channel).rooms.get(t.roomId) : null;
+  if (!room) return reply(socket, 'Uso: /setmaster <giocatore in una stanza>');
+  if (!setMaster(room, room.players.get(t.sessionId))) return reply(socket, 'Stanza piena: nessuno slot libero per annunciarlo.');
+  reply(socket, `${t.displayname} ora è il master della stanza ${room.id}.`);
 }
 
 function cmdEndGame(socket, db, args) {
@@ -505,58 +528,6 @@ function cmdWarn(socket, db, args) {
   reply(socket, `Avviso inviato a ${target.online.displayname}.`);
 }
 
-// Investigation tool, not a ported reference command: forces fields 0-6 of
-// the next auto-respawn Spawn packet (gamesubs.js's scheduleAutoRespawn) to
-// whatever's given here instead of the client's own real values, so the
-// TDM spawn-point mystery can be probed live - change the values, wait for
-// a death+5s, look, repeat - no server restart needed between tries.
-function cmdSpawnFields(socket, db, args) {
-  const u = socket.user;
-  const room = u.roomId !== null ? getChannel(u.channel).rooms.get(u.roomId) : null;
-  if (!room) return reply(socket, 'Devi essere in una stanza.');
-
-  if ((args[0] || '').toLowerCase() === 'off') {
-    room.spawnTestFields = null;
-    return reply(socket, 'Override spento - i respawn tornano a usare i valori reali del client.');
-  }
-
-  const values = args.slice(0, 7).map(Number);
-  if (values.length !== 7 || values.some((n) => !Number.isFinite(n))) {
-    return reply(socket, 'Uso: /spawnfields <v0> <v1> <v2> <v3> <v4> <v5> <v6> | /spawnfields off');
-  }
-  room.spawnTestFields = values;
-  reply(socket, `Override attivo: [${values.join(', ')}] - verrà usato al prossimo auto-respawn nella stanza.`);
-}
-
-// Opt-in variety, not a real fix: rotates ONLY idx2 (the field confirmed to
-// pick the point - see /spawnfields' investigation) through a GM-curated
-// list, per team, leaving every other field (class etc.) as the player's
-// own real value. Deliberately doesn't guess new values on its own -
-// wrong ones have been observed to crash the client outright or lock it in
-// a respawn loop, and which values are safe isn't stable session to
-// session, so this only ever uses whatever a GM has already manually
-// verified in *this* session via /spawnfields. Off by default, never
-// affects a room unless explicitly turned on.
-function cmdSpawnCycle(socket, db, args) {
-  const u = socket.user;
-  const room = u.roomId !== null ? getChannel(u.channel).rooms.get(u.roomId) : null;
-  if (!room) return reply(socket, 'Devi essere in una stanza.');
-
-  if ((args[0] || '').toLowerCase() === 'off') {
-    room.spawnCycle = null;
-    return reply(socket, 'Ciclo spawn disattivato.');
-  }
-
-  const team = { team0: 0, team1: 1 }[(args[0] || '').toLowerCase()];
-  const values = args.slice(1).map(Number);
-  if (team === undefined || values.length === 0 || values.some((n) => !Number.isFinite(n))) {
-    return reply(socket, 'Uso: /spawncycle team0|team1 <valori idx2 già verificati sicuri...> | /spawncycle off');
-  }
-  room.spawnCycle = room.spawnCycle || {};
-  room.spawnCycle[team] = { values, index: 0 };
-  reply(socket, `Ciclo attivo per team${team}: [${values.join(', ')}] - un valore diverso a ogni respawn di quella squadra.`);
-}
-
 // Named /gmhelp, not /help - the client itself intercepts "/help" locally
 // (shows its own built-in command list, never reaches the server as chat).
 // One array entry per command - packItems below only ever joins WHOLE
@@ -581,15 +552,15 @@ const HELP_COMMANDS = [
   '/roominfo <id>',
   '/spectate <id stanza>',
   '/closeroom <id>',
-  '/maps',
-  '/map <id>',
-  '/start',
+  '/start (sblocca, poi premi Start)',
+  '/takemaster',
+  '/setmaster <giocatore>',
   '/endgame',
   '/extendtime <minuti>',
   '/online',
   '/warn <giocatore> <msg>',
-  '/spawnfields <7 valori>|off',
-  '/spawncycle team0|team1 <valori>|off',
+  '/strikes <giocatore>',
+  '/tempban <giocatore> <ore> [motivo]',
   '/gmhelp',
 ];
 
@@ -614,15 +585,15 @@ const COMMANDS = {
   roominfo: cmdRoomInfo,
   spectate: cmdSpectate,
   closeroom: cmdForceCloseRoom,
-  maps: cmdMaps,
-  map: cmdChangeMap,
   start: cmdStart,
+  takemaster: cmdTakeMaster,
+  setmaster: cmdSetMaster,
   endgame: cmdEndGame,
   extendtime: cmdExtendTime,
   online: cmdWho,
   warn: cmdWarn,
-  spawnfields: cmdSpawnFields,
-  spawncycle: cmdSpawnCycle,
+  strikes: cmdStrikes,
+  tempban: cmdTempBan,
   gmhelp: cmdHelp,
 };
 

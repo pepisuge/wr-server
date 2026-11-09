@@ -133,7 +133,14 @@ function strike(u, kind, detail) {
   s.strikes = s.strikes.filter((t) => now - t < STRIKE_WINDOW_MS);
   s.strikes.push(now);
   console.warn(`anticheat: ${u.displayname} (${u.id}) ${kind}: ${detail} [${s.strikes.length}/${STRIKES_TO_KICK}]`);
-  require('./chat').sendSystemWhisper(u.socket, `Anticheat: ${kind} detected (${s.strikes.length}/${STRIKES_TO_KICK}).`);
+  s.history = [...(s.history || []), { t: now, kind, detail }].slice(-10); // for the GM command /strikes
+  const chat = require('./chat');
+  chat.sendSystemWhisper(u.socket, `Anticheat: ${kind} detected (${s.strikes.length}/${STRIKES_TO_KICK}).`);
+  // Online GMs see it as it happens (chat lines are ~50 chars, keep it short).
+  const { users } = require('./state');
+  for (const gm of users.values()) {
+    if (gm.isGm && gm !== u) chat.sendSystemWhisper(gm.socket, `AC ${u.displayname}: ${kind} ${s.strikes.length}/${STRIKES_TO_KICK}`);
+  }
   if (s.strikes.length >= STRIKES_TO_KICK) {
     console.warn(`anticheat: ${u.displayname} (${u.id}) disconnected`);
     u.socket.destroy();

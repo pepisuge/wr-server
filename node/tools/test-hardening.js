@@ -414,6 +414,58 @@ const { users } = require('../game/state');
     users.delete(602);
   }
 
+  // GM /takemaster, /setmaster: master moves, announced as a "leave" of an empty slot; impossible in a full room
+  {
+    const { setMaster } = require('../game/rooms');
+    const { xorBuffer } = require('../lib/packet');
+    const sent = [];
+    const mk = (sid) => ({ id: sid, sessionId: sid, socket: { write: (b) => sent.push(xorBuffer(b, 0x96).toString('utf8')) } });
+    users.set(801, mk(801)).set(802, mk(802));
+    const room = { id: 9, maxPlayers: 4, master: 0, players: new Map([[801, { sessionId: 801, slot: 0 }], [802, { sessionId: 802, slot: 2, ready: false }]]) };
+    assert.ok(setMaster(room, room.players.get(802)));
+    assert.strictEqual(room.master, 2);
+    assert.ok(room.players.get(802).ready, 'new master is ready');
+    assert.ok(sent.length === 2 && sent[0].includes(' 29504 1 -1 3 2 2 '), 'leave of empty slot 3 with master 2');
+    room.maxPlayers = 3;
+    room.players.set(803, { sessionId: 803, slot: 1 });
+    room.players.set(804, { sessionId: 804, slot: 2 });
+    assert.strictEqual(setMaster(room, room.players.get(801)), false, 'full room');
+    users.delete(801);
+    users.delete(802);
+  }
+
+  // Bans: a temporary one is lifted after ban_until, a running or permanent one holds
+  {
+    const { isBanned } = require('../auth/handlers');
+    const lifted = [];
+    const db = { query: async (sql, p) => (lifted.push(p[0]), [{}]) };
+    const now = Date.now() / 1000;
+    assert.strictEqual(await isBanned(db, { id: 1, status: 1, ban_until: 0 }), false, 'not banned');
+    assert.strictEqual(await isBanned(db, { id: 2, status: 0, ban_until: 0 }), true, 'permanent');
+    assert.strictEqual(await isBanned(db, { id: 3, status: 0, ban_until: now + 3600 }), true, 'tempban running');
+    assert.strictEqual(await isBanned(db, { id: 4, status: 0, ban_until: now - 1 }), false, 'tempban over');
+    assert.deepStrictEqual(lifted, [4], 'only the expired one is lifted');
+  }
+
+  // Anticheat strikes are kept for /strikes and whispered to online GMs
+  {
+    const { strike } = require('../game/anticheat');
+    const seen = [];
+    const mk = (sid, name, isGm) => {
+      const u = { id: sid, sessionId: sid, displayname: name, isGm, socket: { sendPacket: (id, f) => seen.push([name, f.at(-1)]), destroy() {} } };
+      u.socket.user = u;
+      return u;
+    };
+    const cheat = mk(701, 'Cheat', false);
+    const gm = mk(702, 'Boss', true);
+    users.set(701, cheat).set(702, gm);
+    strike(cheat, 'speed', 'client clock 2.00x');
+    assert.strictEqual(cheat.ac.history[0].kind, 'speed');
+    assert.ok(seen.some(([to, text]) => to === 'Boss' && text.includes('AC Cheat: speed')), 'GM alerted');
+    users.delete(701);
+    users.delete(702);
+  }
+
   process.stdout.write('test-hardening: ok\n');
 })().catch((err) => {
   process.stderr.write(err.stack + '\n');

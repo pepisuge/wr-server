@@ -45,7 +45,7 @@ jobs:
       - name: Login end to end
         run: |
           docker compose -f docker/docker-compose.yml exec -T db mariadb -uroot -pchangeme masterserver \
-            -e "INSERT INTO users VALUES (900,'citest',1,'CITest',SHA2('cipass123aaaaaaaaaa',256),'aaaaaaaaaa')"
+            -e "INSERT INTO users (id, username, status, displayname, password, passwordsalt) VALUES (900,'citest',1,'CITest',SHA2('cipass123aaaaaaaaaa',256),'aaaaaaaaaa')"
           node node/tools/smoke-login.js citest cipass123   # from the runner: 5330/5340 are published
           # website: register an account, then log in with it in game
           curl -sf -d 'username=ciweb&nickname=CIWeb&password=cipass123&password2=cipass123' http://127.0.0.1:8080/register | grep -q 'Account created'

@@ -457,6 +457,22 @@ function reassignMaster(room) {
   }
 }
 
+// GM /takemaster, /setmaster. The client learns who the master is only from the room info at join and from the
+// master field of a RoomLeave broadcast, so a "leave" of an empty slot carries the new master without anyone leaving.
+// Returns false when every slot is taken (no empty slot to name).
+function setMaster(room, player) {
+  const taken = new Set([...room.players.values()].map((p) => p.slot));
+  let empty = -1;
+  for (let slot = room.maxPlayers - 1; slot >= 0 && empty < 0; slot--) if (!taken.has(slot)) empty = slot;
+  if (empty < 0) return false;
+  room.master = player.slot;
+  room.supermaster = false;
+  player.ready = true; // like Room.Remove's new master
+  broadcastPacket(roomSockets(room), XOR.external, ROOM_LEAVE, [1, -1, empty, room.players.size, room.master, 0, 0]);
+  sendRoomUpdateToLobby(room, true);
+  return true;
+}
+
 // Shared by handleRoomLeave (explicit ROOM_LEAVE packet) and the socket
 // 'close' handler (handlers.js) - a dropped connection (crash, closed
 // client, no explicit leave) must clean up the room the same way an
@@ -713,6 +729,7 @@ function handleRoomInvite(socket, pkt) {
 }
 
 module.exports = {
+  setMaster,
   handleRoomCreation,
   handleRoomJoin,
   handleRoomQuickJoin,
