@@ -38,10 +38,12 @@ Answering `0` in every version field makes the client conclude it is up to date.
 
 ```
 IN  id=4352 blocks=[1335749171, 0, <user>, <password>, 0, 0]
-OUT id=4352 blocks=[1, 100, 0, <user>, NULL, <nick>, 24693, 1, 0, 1, 1, 1, Spain, 127.0.0.1, 5340, 0, 0, -1,-1,-1,-1, 0, 0]
+OUT id=4352 blocks=[1, 100, 0, <user>, <webToken>, <nick>, 24693, 1, 0, 1, 1, 1, Spain, 127.0.0.1, 5340, 0, 0, -1,-1,-1,-1, 0, 0]
 ```
 
 `blocks[2]`/`blocks[3]` are username and password. Passwords are stored as `SHA256(password + salt)` with a per-row salt.
+
+`blocks[4]` was `NULL` upstream; here it is a random 32-hex **website sign-on token**. Client 22 stores that field at `0x935028` (64 bytes) and never sends it back. Auth passes it to the game servers in the internal `PLAYER_AUTHORIZATION` push (5th field); the website (`game/web.js`) trades `/clan?t=<token>` for a session cookie. One token per account, replaced at every login, valid 24 h. The clan UI DLL reads it from client memory when the CLAN button opens the page, so players don't log in twice.
 
 Errors: `72010` unknown user, `72020` wrong password, `73050` banned (`users.status <= 0`), `74010`/`74020` empty fields.
 

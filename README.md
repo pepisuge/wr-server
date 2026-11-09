@@ -27,7 +27,7 @@ Two processes: `auth-server.js` (login / server list) and `game-server.js` (room
 | **Shop & inventory** | `███████▌░░` 75% | buy (atomic), equipment and loadouts, coupons, rename and K/D reset items | renewal ([#8](https://github.com/pepisuge/wr-server/issues/8)), item effects ([#7](https://github.com/pepisuge/wr-server/issues/7)) |
 | **Progression** | `████████░░` 80% | XP, levels, level-up rewards, premium, boosters | |
 | **Anti-cheat (server side)** | `███████▌░░` 75% | weapon must be in the loadout, hit rate cap, knife range, attacker slot enforced, connection and packet limits | aim/headshot validation (needs map geometry) |
-| **Website** | `░░░░░░░░░░` 0% | | registration, rankings, clan pages |
+| **Website** | `████░░░░░░` 40% | registration, login, clan list, clan management (also in game via `/url`) | referral ([#34](https://github.com/pepisuge/wr-server/issues/34)), rankings, HTTPS setup, final design |
 
 **Overall: ~70%.** Open work is tracked in the [issues](https://github.com/pepisuge/wr-server/issues); protocol findings go to [`docs/protocol`](docs/protocol/index.md).
 
@@ -38,7 +38,7 @@ cd node && npm install
 node auth-server.js
 node game-server.js
 ```
-Without Docker: load `WarRock-Chapter-1-Server/Databases/*.SQL` (`git submodule update --init`), then `sql/03`…`08` into `wres2`, in order.
+Without Docker: load `WarRock-Chapter-1-Server/Databases/*.SQL` (`git submodule update --init`), then `sql/03`…`09` into `wres2`, in order.
 **Warning:** the upstream dumps contain `USE` + `DROP TABLE`, so they wipe an existing `masterserver`/`wres2`; back up first.
 
 With Docker (from the repo root, after `git submodule update --init` and `cp docker/.env.example docker/.env`):
@@ -57,11 +57,12 @@ Protocol reference: [`docs/protocol`](docs/protocol/index.md), also published at
 | `WR_PATCH_URL` | patch base URL sent to the launcher (default `http://<auth address>/wr/`) |
 | `WR_SERVER_TYPE` | server type sent in the list (client 22 test: 65..70) |
 | `WR_MAX_CONN_PER_IP` | open connections allowed per client IP (default 10); raise it behind Docker Desktop or a proxy, where every client shares one IP |
+| `WR_WEB_PORT` | website port inside the game server (default 8080, `0` = off); put an HTTPS reverse proxy in front of it on the internet |
 | `WR_PONG_TIMEOUT_MS` | liveness timeout (raise it while a debugger pauses the client) |
 | `LOG_LEVEL` | `debug` logs every packet (chat included) and UDP relay detail; default: connections, errors and warnings only |
 | `WR_UDP_DUMP` / `WR_RECORD` | append raw UDP tunnel packets / decoded movement+hit events to a JSONL file |
 
-Ports: 5330 (login) and 5340 (game) TCP, 5350-5351 UDP. **Never expose 5012** (internal channel).
+Ports: 5330 (login) and 5340 (game) TCP, 5350-5351 UDP, 8080 website (HTTP). **Never expose 5012** (internal channel).
 
 ### Checks
 `cd node && node tools/test-hardening.js` (no DB). With the servers running: `node tools/smoke-login.js <user> <password>`

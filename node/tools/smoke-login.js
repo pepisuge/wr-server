@@ -1,7 +1,9 @@
 // End-to-end login against running servers (used by CI's docker job): node tools/smoke-login.js <user> <password> [host]
 // Login (5330) -> session -> game Authorization (5340) must succeed; the same packet with another userId or a replayed session must be refused.
+// The website (8080) must trade the login's sign-on token for a session cookie, and refuse a made-up one.
 const assert = require('assert');
 const net = require('net');
+const http = require('http');
 const { wrapSocket } = require('../lib/xor-socket');
 
 const [user, password, host = '127.0.0.1'] = process.argv.slice(2);
@@ -19,6 +21,9 @@ function request(port, id, fields) {
     s.setTimeout(5000, () => reject(new Error(`timeout on ${port} id ${id}`)));
   });
 }
+
+const get = (path) =>
+  new Promise((resolve, reject) => http.get({ host, port: 8080, path }, (res) => resolve(res.resume() && res)).on('error', reject));
 
 (async () => {
   const login = await request(5330, 0x1100, [0, 0, user, password]);

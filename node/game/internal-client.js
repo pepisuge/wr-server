@@ -12,6 +12,22 @@ const SESSION_TTL_MS = 10 * 60 * 1000; // login -> game connect takes seconds
 // sessionId -> { userId, username, displayname, at }: logins announced by Auth, consumed by game/handlers.js.
 const pendingSessions = new Map();
 
+// Website sign-on tokens from the same push: token -> { userId, username, displayname, at }. One per account (a new
+// login replaces it), reusable until then so the CLAN button works on every click; read by game/web.js.
+const WEB_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+const webTokens = new Map();
+
+function webTokenUser(token) {
+  const t = webTokens.get(token);
+  return t && Date.now() - t.at < WEB_TOKEN_TTL_MS ? t : null;
+}
+
+function addWebToken(token, user) {
+  if (!/^[0-9a-f]{32}$/.test(token || '')) return;
+  for (const [k, v] of webTokens) if (v.userId === user.userId || Date.now() - v.at > WEB_TOKEN_TTL_MS) webTokens.delete(k);
+  webTokens.set(token, { ...user, at: Date.now() });
+}
+
 function takeSession(sessionId, userId, username) {
   const s = pendingSessions.get(sessionId);
   if (!s || s.userId !== userId || s.username.toLowerCase() !== username.toLowerCase() || Date.now() - s.at > SESSION_TTL_MS) return null;
@@ -33,10 +49,11 @@ function connectToAuthServer(config) {
     if (pkt.id === CONNECTION) {
       socket.sendPacket(AUTHORIZATION, [1, config.serverKey, `${config.serverName} `, config.serverIp, PORTS.game, Number(process.env.WR_SERVER_TYPE) || 0]); // WR_SERVER_TYPE=65..70: client 22 "A..F" channel UI (test)
     } else if (pkt.id === PLAYER_AUTHORIZATION) {
-      const [sessionId, userId, username, displayname] = pkt.blocks;
+      const [sessionId, userId, username, displayname, webToken] = pkt.blocks;
       const now = Date.now();
       for (const [id, s] of pendingSessions) if (now - s.at > SESSION_TTL_MS) pendingSessions.delete(id);
       pendingSessions.set(Number(sessionId), { userId: Number(userId), username, displayname, at: now });
+      addWebToken(webToken, { userId: Number(userId), username, displayname });
     } else if (pkt.id === AUTHORIZATION) {
       const [errorCode, serverId] = pkt.blocks;
       if (Number(errorCode) === 1) {
@@ -56,4 +73,4 @@ function connectToAuthServer(config) {
   return socket;
 }
 
-module.exports = { connectToAuthServer, takeSession, pendingSessions };
+module.exports = { connectToAuthServer, takeSession, pendingSessions, webTokenUser, addWebToken };

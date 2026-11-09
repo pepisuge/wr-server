@@ -252,6 +252,40 @@ const { users } = require('../game/state');
     users.delete(402);
   }
 
+  // Clan actions (game and website): targets are checked against their real clan/rank, online or not
+  {
+    const clan = require('../game/clan');
+    const rows = { 501: { id: 501, money: 0, clanid: 77, clanrank: 2 }, 502: { id: 502, money: 0, clanid: 77, clanrank: 0 },
+      503: { id: 503, money: 0, clanid: 88, clanrank: 9 }, 504: { id: 504, money: 0, clanid: 77, clanrank: 9 } };
+    const writes = [];
+    const db = { query: async (sql, p) => (sql.startsWith('SELECT') ? [[rows[p[0]]].filter(Boolean)] : (writes.push(sql), [{}])) };
+    clan.clans.set(77, { id: 77, name: 'Alpha', master: 501, members: 2, wins: 0, losses: 0 });
+    const officer = { id: 500, displayname: 'Off', clanId: 77, clanRank: clan.RANK.OFFICER };
+
+    assert.ok(await clan.joinAction(db, officer, 0, 503), 'applicant of another clan: refused');
+    assert.ok(await clan.joinAction(db, officer, 1, 502), 'a member is not an applicant');
+    assert.ok(await clan.rankAction(db, officer, 2, 501), 'the master cannot be kicked');
+    assert.ok(await clan.rankAction(db, officer, 2, 503), 'outsider cannot be kicked');
+    assert.ok(await clan.promote(db, officer, 502), 'only the master hands the clan over');
+    assert.strictEqual(writes.length, 0, 'refused actions write nothing');
+    assert.strictEqual(await clan.joinAction(db, officer, 0, 504), undefined, 'real applicant accepted');
+    assert.strictEqual(clan.clans.get(77).members, 3);
+    clan.clans.delete(77);
+  }
+
+  // Website sign-on tokens: well-formed only, one per account (a new login replaces the old one)
+  {
+    const { webTokenUser, addWebToken } = require('../game/internal-client');
+    const a = 'a'.repeat(32), b = 'b'.repeat(32);
+    addWebToken('NULL', { userId: 1 });
+    assert.strictEqual(webTokenUser('NULL'), null, 'malformed token ignored');
+    addWebToken(a, { userId: 1, username: 'u' });
+    assert.strictEqual(webTokenUser(a).userId, 1);
+    addWebToken(b, { userId: 1, username: 'u' });
+    assert.strictEqual(webTokenUser(a), null, 'old token gone after a new login');
+    assert.strictEqual(webTokenUser(b).userId, 1);
+  }
+
   process.stdout.write('test-hardening: ok\n');
 })().catch((err) => {
   process.stderr.write(err.stack + '\n');

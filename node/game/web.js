@@ -1,0 +1,340 @@
+// Website: account registration (#19) and clan management, plain HTML forms with no client JS so it also works in the
+// game's embedded Internet Explorer (client chat command `/url`). Runs inside the game server so clan actions share
+// its in-memory state with the in-game clan packets. Put it behind an HTTPS reverse proxy when it faces the internet.
+const http = require('http');
+const crypto = require('crypto');
+const { hashPassword, newScryptSalt, sameHash } = require('../auth/handlers');
+const clan = require('./clan');
+const { loadUserDetails } = require('./progression');
+const { webTokenUser } = require('./internal-client');
+
+const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
+const MAX_BODY = 4096;
+const USERNAME_RE = /^[A-Za-z0-9]{3,20}$/; // users.username varchar(20); the login accepts only alphanumerics
+const NICKNAME_RE = /^[A-Za-z0-9]{3,16}$/; // same rule as the in-game rename (shop.js)
+const RANK_NAME = { 0: 'Member', 1: 'Officer', 2: 'Master', 9: 'Applicant' };
+
+const sessions = new Map(); // token -> { userId, username, displayname, csrf, expires }
+const attempts = new Map(); // `${kind}:${ip}` -> timestamps, for the login and registration limits
+
+function tooMany(kind, ip, max, windowMs) {
+  const key = `${kind}:${ip}`;
+  const now = Date.now();
+  const list = (attempts.get(key) || []).filter((t) => now - t < windowMs);
+  attempts.set(key, list);
+  return list.length >= max;
+}
+
+function note(kind, ip) {
+  attempts.get(`${kind}:${ip}`).push(Date.now());
+}
+
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+function page(title, body, s) {
+  const nav = s
+    ? `<a href="/clan">Clan</a> <a href="/clans">Clans</a> <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="${s.csrf}"><button>Logout ${esc(s.displayname)}</button></form>`
+    : '<a href="/clans">Clans</a> <a href="/register">Register</a> <a href="/login">Login</a>';
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} - WarRock</title><style>${CSS}</style></head>
+<body><div class="scan"></div><div class="wrap"><div class="top"><a href="/" class="logo">WAR<b>ROCK</b></a><span class="nav">${nav}</span></div>
+<div class="ruler"></div><h1>${esc(title)}</h1>${body}</div></body></html>`;
+}
+
+const CSS = `body{margin:0;background:#151617;color:#ECECEC;font:14px Tahoma,Verdana,sans-serif}
+.wrap{position:relative;max-width:720px;margin:0 auto;padding:12px 16px}
+.scan{position:fixed;left:0;top:0;right:0;bottom:0;pointer-events:none;background:repeating-linear-gradient(to bottom,rgba(255,255,255,.025) 0,rgba(255,255,255,.025) 1px,transparent 1px,transparent 4px);animation:down 8s linear infinite}
+.ruler{height:8px;margin:6px 0 4px;background:repeating-linear-gradient(to right,#55585A 0,#55585A 1px,transparent 1px,transparent 10px);animation:down 2s linear infinite}
+@keyframes down{from{background-position:0 0}to{background-position:0 40px}}
+.top{overflow:hidden;border-bottom:1px solid #55585A;padding-bottom:8px}.logo{float:left;font:bold 22px Arial,sans-serif;letter-spacing:2px;color:#E4E4E4;text-decoration:none}.logo b{color:#F2B01E}
+.nav{float:right;line-height:28px}.nav a{margin-left:12px}
+a{color:#F2B01E}h1{font:bold 16px Arial,sans-serif;letter-spacing:1px;text-transform:uppercase;color:#C9CBCC}
+.box{background:#262728;border:1px solid #55585A;padding:12px;margin:0 0 12px}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:5px 6px;border-bottom:1px solid #303132}th{color:#A3A6A8;font-weight:normal;text-transform:uppercase;font-size:12px}
+input{background:#151617;color:#ECECEC;border:1px solid #55585A;padding:5px;width:220px}label{display:block;color:#A3A6A8;margin:8px 0 3px}
+button{background:#303132;color:#ECECEC;border:1px solid #55585A;padding:5px 12px;cursor:pointer}button:hover{border-color:#F2B01E}
+.inline{display:inline;margin:0}.inline button{padding:2px 8px;margin-left:4px}.danger{border-color:#E5533D}
+.err{color:#E5533D}.ok{color:#E8912D}.muted{color:#A3A6A8}`;
+
+function send(res, status, html, headers = {}) {
+  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'X-Frame-Options': 'DENY', ...headers });
+  res.end(html);
+}
+
+const redirect = (res, to, headers = {}) => {
+  res.writeHead(303, { Location: to, ...headers });
+  res.end();
+};
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (chunk) => {
+      data += chunk;
+      if (data.length > MAX_BODY) reject(new Error('body too large'));
+    });
+    req.on('end', () => resolve(new URLSearchParams(data)));
+    req.on('error', reject);
+  });
+}
+
+function session(req) {
+  const m = /(?:^|;\s*)wr_s=([a-f0-9]{64})/.exec(req.headers.cookie || '');
+  const s = m && sessions.get(m[1]);
+  if (!s || s.expires < Date.now()) return null;
+  s.expires = Date.now() + SESSION_TTL_MS;
+  return s;
+}
+
+const form = (action, fields, button, csrf) =>
+  `<form method="post" action="${action}">${csrf ? `<input type="hidden" name="csrf" value="${csrf}">` : ''}${fields}<p><button>${button}</button></p></form>`;
+
+const field = (name, label, type = 'text') => `<label for="${name}">${label}</label><input id="${name}" name="${name}" type="${type}">`;
+
+const msg = (text, cls = 'err') => (text ? `<p class="${cls}">${esc(text)}</p>` : '');
+
+// One-button form posting a clan action; `extra` carries the target/clan id.
+const act = (s, action, label, extra = '', cls = '') =>
+  `<form method="post" action="/clan" class="inline"><input type="hidden" name="csrf" value="${s.csrf}"><input type="hidden" name="action" value="${action}">${extra}<button class="${cls}">${label}</button></form>`;
+
+function registerPage(res, error) {
+  send(res, error ? 400 : 200, page('Register', `<div class="box">${msg(error)}${form('/register',
+    field('username', 'Username (login, 3-20 letters or digits)') + field('nickname', 'Nickname (in game, 3-16 letters or digits)') +
+    field('password', 'Password (6-16 characters)', 'password') + field('password2', 'Repeat password', 'password'), 'Create account')}</div>`));
+}
+
+async function register(req, res, authDb, ip) {
+  const b = await readBody(req);
+  const [username, nickname, password] = [b.get('username') || '', b.get('nickname') || '', b.get('password') || ''];
+  if (!USERNAME_RE.test(username)) return registerPage(res, 'Invalid username.');
+  if (!NICKNAME_RE.test(nickname)) return registerPage(res, 'Invalid nickname.');
+  // 16: what the client's login field takes; a longer password could never be typed in game.
+  if (password.length < 6 || password.length > 16) return registerPage(res, 'The password must be 6-16 characters.');
+  if (password !== b.get('password2')) return registerPage(res, 'The passwords do not match.');
+  if (tooMany('register', ip, 3, 60 * 60 * 1000)) return registerPage(res, 'Too many accounts from this address, try later.');
+
+  const [taken] = await authDb.query('SELECT username FROM users WHERE username = ? OR displayname = ?', [username, nickname]);
+  if (taken.length) return registerPage(res, 'Username or nickname already taken.');
+
+  const salt = newScryptSalt();
+  const hash = await hashPassword(password, salt);
+  // users.id has no AUTO_INCREMENT upstream; the primary key and sql/09's unique names reject a concurrent duplicate.
+  try {
+    await authDb.query(
+      'INSERT INTO users (id, username, status, displayname, password, passwordsalt) SELECT COALESCE(MAX(id), 0) + 1, ?, 1, ?, ?, ? FROM users',
+      [username, nickname, hash, salt]
+    );
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return registerPage(res, 'Username or nickname already taken, try again.');
+    throw err;
+  }
+  note('register', ip);
+  send(res, 200, page('Register', `<div class="box"><p class="ok">Account created. Log in from the game, or <a href="/login">here</a> to manage your clan.</p></div>`));
+}
+
+function loginPage(res, error) {
+  send(res, error ? 400 : 200, page('Login', `<div class="box">${msg(error)}${form('/login', field('username', 'Username') + field('password', 'Password', 'password'), 'Login')}</div>`));
+}
+
+async function login(req, res, authDb, ip) {
+  const b = await readBody(req);
+  if (tooMany('login', ip, 5, 5 * 60 * 1000)) return loginPage(res, 'Too many attempts, wait a few minutes.');
+  const [rows] = await authDb.query('SELECT id, status, displayname, password, passwordsalt FROM users WHERE username = ?', [b.get('username') || '']);
+  const user = rows[0];
+  if (!user || !sameHash(await hashPassword(b.get('password') || '', user.passwordsalt), user.password)) {
+    note('login', ip);
+    return loginPage(res, 'Wrong username or password.');
+  }
+  if (user.status <= 0) return loginPage(res, 'This account is banned.');
+  signIn(res, Number(user.id), b.get('username'), user.displayname);
+}
+
+function signIn(res, userId, username, displayname) {
+  const token = crypto.randomBytes(32).toString('hex');
+  sessions.set(token, { userId, username, displayname, csrf: crypto.randomBytes(16).toString('hex'), expires: Date.now() + SESSION_TTL_MS });
+  redirect(res, '/clan', { 'Set-Cookie': `wr_s=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_MS / 1000}` });
+}
+
+async function clansPage(res, s) {
+  const list = [...clan.clans.values()].sort((a, b) => b.wins - a.wins || a.name.localeCompare(b.name));
+  const names = await clan.resolveDisplaynames(list.map((c) => c.master));
+  const rows = list
+    .map((c) => `<tr><td>${esc(c.name)}</td><td>${esc(names.get(c.master) || '??')}</td><td>${c.members}/${clan.MAX_MEMBERS}</td><td>${c.wins}/${c.losses}</td></tr>`)
+    .join('');
+  send(res, 200, page('Clans', `<div class="box"><table><tr><th>Clan</th><th>Master</th><th>Members</th><th>W/L</th></tr>${rows || '<tr><td colspan="4" class="muted">No clans yet.</td></tr>'}</table></div>`, s));
+}
+
+// A new account has no game row until its first game login; create it here so the site works right after sign-up.
+async function player(db, s) {
+  const u = (await clan.memberOf(db, s.userId)) || (await loadUserDetails(db, s.userId), await clan.memberOf(db, s.userId));
+  u.displayname = u.displayname || s.displayname;
+  return u;
+}
+
+async function clanPage(res, db, s, notice) {
+  const u = await player(db, s);
+  const c = clan.clans.get(u.clanId);
+  let body = notice ? msg(notice.text, notice.ok ? 'ok' : 'err') : '';
+
+  if (!c) {
+    const list = [...clan.clans.values()].filter((x) => x.members < clan.MAX_MEMBERS);
+    body += `<div class="box"><p>You are not in a clan. Dinars: ${u.money}</p>${form('/clan',
+      '<input type="hidden" name="action" value="create">' + field('name', `Create a clan (5-20 letters, digits, _ or -), costs ${clan.CREATE_COST} dinars`), 'Create clan', s.csrf)}</div>`;
+    body += `<div class="box"><table><tr><th>Clan</th><th>Members</th><th></th></tr>${list
+      .map((x) => `<tr><td>${esc(x.name)}</td><td>${x.members}/${clan.MAX_MEMBERS}</td><td>${act(s, 'apply', 'Apply', `<input type="hidden" name="clan" value="${x.id}">`)}</td></tr>`)
+      .join('') || '<tr><td colspan="3" class="muted">No clan is open.</td></tr>'}</table></div>`;
+    return send(res, 200, page('Clan', body, s));
+  }
+  if (u.clanRank === clan.RANK.PENDING) {
+    body += `<div class="box"><p>Application sent to <b>${esc(c.name)}</b>, waiting for a master or officer.</p>${act(s, 'leave', 'Withdraw')}</div>`;
+    return send(res, 200, page('Clan', body, s));
+  }
+
+  const [rows] = await db.query('SELECT id, clanrank, xp FROM user_details WHERE clanid = ? ORDER BY clanrank DESC, xp DESC', [c.id]);
+  const names = await clan.resolveDisplaynames(rows.map((r) => r.id));
+  const boss = u.clanRank === clan.RANK.MASTER || u.clanRank === clan.RANK.OFFICER;
+  const target = (id) => `<input type="hidden" name="target" value="${id}">`;
+  const tr = (r, buttons) => `<tr><td>${esc(names.get(r.id) || '??')}</td><td>${RANK_NAME[r.clanrank]}</td><td>${r.xp}</td><td>${buttons}</td></tr>`;
+  const members = rows.filter((r) => r.clanrank !== clan.RANK.PENDING);
+  const pending = rows.filter((r) => r.clanrank === clan.RANK.PENDING);
+  const memberButtons = (r) => {
+    if (!boss || r.id === u.id || r.clanrank === clan.RANK.MASTER) return '';
+    return (r.clanrank === clan.RANK.MEMBER ? act(s, 'officer', 'Officer', target(r.id)) : act(s, 'demote', 'Demote', target(r.id))) +
+      act(s, 'kick', 'Kick', target(r.id), 'danger') +
+      (u.clanRank === clan.RANK.MASTER ? act(s, 'master', 'Make master', target(r.id)) : '');
+  };
+
+  body += `<div class="box"><p><b>${esc(c.name)}</b> &middot; ${c.members}/${clan.MAX_MEMBERS} members &middot; W/L ${c.wins}/${c.losses} &middot; you are ${RANK_NAME[u.clanRank]}</p>
+<table><tr><th>Name</th><th>Rank</th><th>XP</th><th></th></tr>${members.map((r) => tr(r, memberButtons(r))).join('')}</table></div>`;
+  if (boss) {
+    body += `<div class="box"><h1>Applicants</h1>${pending.length
+      ? `<table><tr><th>Name</th><th>Rank</th><th>XP</th><th></th></tr>${pending
+        .map((r) => tr(r, act(s, 'accept', 'Accept', target(r.id)) + act(s, 'refuse', 'Refuse', target(r.id), 'danger')))
+        .join('')}</table>`
+      : '<p class="muted">No applications. Players apply from their own Clan page (or in game); they show up here to accept or refuse. Once in, each member gets buttons here: Officer/Demote, Kick and, for the master, Make master.</p>'}</div>`;
+  }
+  body += `<div class="box">${u.clanRank === clan.RANK.MASTER ? act(s, 'disband', 'Disband the clan', '', 'danger') + ' <span class="muted">Hand the clan to someone else first if you want to leave it.</span>' : act(s, 'leave', 'Leave the clan', '', 'danger')}</div>`;
+  send(res, 200, page('Clan', body, s));
+}
+
+async function clanAction(req, res, db, s) {
+  const b = await readBody(req);
+  if (b.get('csrf') !== s.csrf) return clanPage(res, db, s, { text: 'Session expired, try again.' });
+  const u = await player(db, s);
+  const target = Number(b.get('target'));
+  const actions = {
+    create: () => clan.createClan(db, u, b.get('name') || ''),
+    apply: () => clan.applyClan(db, u, Number(b.get('clan'))),
+    // Leaving as master would silently disband (the in-game rule); the site has an explicit disband button instead.
+    leave: () => (u.clanRank === clan.RANK.MASTER ? 'Use Disband, or make someone else master first.' : clan.leaveClan(db, u)),
+    disband: () => clan.disbandBy(db, u),
+    accept: () => clan.joinAction(db, u, 0, target),
+    refuse: () => clan.joinAction(db, u, 1, target),
+    officer: () => clan.rankAction(db, u, 0, target),
+    demote: () => clan.rankAction(db, u, 1, target),
+    kick: () => clan.rankAction(db, u, 2, target),
+    master: () => clan.promote(db, u, target),
+  };
+  const run = actions[b.get('action')];
+  const err = run ? await run() : 'Unknown action.';
+  clanPage(res, db, s, { text: err || 'Done.', ok: !err });
+}
+
+async function route(req, res, db, authDb) {
+  const ip = req.socket.remoteAddress;
+  const path = req.url.split('?')[0];
+  const post = req.method === 'POST';
+  const s = session(req);
+
+  if (path === '/' && !post) {
+    return send(res, 200, page('War Rock', `<div class="box"><p>Chapter 1 private server.</p><p>${s ? '<a href="/clan">Manage your clan</a>' : '<a href="/register">Create an account</a> &middot; <a href="/login">Login</a>'}</p></div>`, s));
+  }
+  if (path === '/register') return post ? register(req, res, authDb, ip) : registerPage(res);
+  if (path === '/login') return post ? login(req, res, authDb, ip) : loginPage(res);
+  if (path === '/clans' && !post) return clansPage(res, s);
+  if (path === '/logout' && post) {
+    const b = await readBody(req);
+    if (s && b.get('csrf') === s.csrf) for (const [k, v] of sessions) if (v === s) sessions.delete(k);
+    return redirect(res, '/', { 'Set-Cookie': 'wr_s=; Path=/; Max-Age=0' });
+  }
+  if (path === '/clan') {
+    // Single sign-on from the game client (?t= token handed out at game login, see internal-client.js). Redirects to
+    // the bare URL so the token doesn't stay in the address bar or history.
+    const t = !post && new URLSearchParams(req.url.split('?')[1] || '').get('t');
+    if (t) {
+      const user = webTokenUser(t);
+      return user ? signIn(res, user.userId, user.username, user.displayname) : redirect(res, '/login');
+    }
+    if (!s) return redirect(res, '/login');
+    return post ? clanAction(req, res, db, s) : clanPage(res, db, s);
+  }
+  // Lobby user list emblems: the client fetches <id>.crc, and <id>.jpg only when the crc text changed (cached in
+  // texture/Avata). Unknown clan: 404, so the client falls back to DefaultClanMark.jpg.
+  const avatar = /^\/avatar\/(\d+)\.(jpg|crc)$/.exec(path);
+  if (avatar && !post) {
+    const c = clan.clans.get(Number(avatar[1]));
+    if (!c) return send(res, 404, 'no such clan');
+    const img = emblem(c.name);
+    res.writeHead(200, { 'Content-Type': avatar[2] === 'crc' ? 'text/plain' : 'image/bmp', 'Cache-Control': 'no-cache' });
+    return res.end(avatar[2] === 'crc' ? crypto.createHash('md5').update(img).digest('hex') : img);
+  }
+  if (path === '/ClanAvatar.aspx' && !post) {
+    const name = new URLSearchParams(req.url.split('?')[1] || '').get('Clan') || '';
+    console.log(`web: clan emblem for "${name.slice(0, 40)}"`);
+    res.writeHead(200, { 'Content-Type': 'image/bmp', 'Cache-Control': 'max-age=3600' });
+    return res.end(emblem(name));
+  }
+  send(res, 404, page('Not found', '<div class="box"><p><a href="/">Home</a></p></div>', s));
+}
+
+// Clan emblem for the game client (it downloads `ClanAvatar.aspx?Clan=<name>` into a .jpg but loads it through
+// Direct3D, which reads any format): a shield in a colour picked from the name, on dark grey. 32x32 24-bit BMP,
+// so no image library is needed. Uploaded emblems can replace this later.
+function emblem(name) {
+  const S = 32;
+  const hash = crypto.createHash('md5').update(name.toLowerCase()).digest();
+  const colour = [hash[0], hash[1], hash[2]].map((v) => 80 + (v % 160)); // never too dark on the grey
+  const rowSize = S * 3; // 96, already a multiple of 4
+  const buf = Buffer.alloc(54 + rowSize * S);
+  buf.write('BM', 0);
+  buf.writeUInt32LE(buf.length, 2);
+  buf.writeUInt32LE(54, 10);
+  buf.writeUInt32LE(40, 14);
+  buf.writeInt32LE(S, 18);
+  buf.writeInt32LE(S, 22); // bottom-up rows
+  buf.writeUInt16LE(1, 26);
+  buf.writeUInt16LE(24, 28);
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const top = S - 1 - y; // distance from the top edge
+      const dx = Math.abs(x - 15.5);
+      // shield: straight sides down to 60%, then a point at the bottom
+      const inShield = top >= 4 && top <= 28 && dx <= 11 && (top < 18 || dx <= (28 - top) * 1.1);
+      const rgb = inShield ? colour : [48, 50, 52];
+      const o = 54 + y * rowSize + x * 3;
+      buf[o] = rgb[2];
+      buf[o + 1] = rgb[1];
+      buf[o + 2] = rgb[0];
+    }
+  }
+  return buf;
+}
+
+function startWeb(db, authDb, port) {
+  const server = http.createServer((req, res) => {
+    route(req, res, db, authDb).catch((err) => {
+      console.error('web:', err.message);
+      if (!res.headersSent) send(res, 500, page('Error', '<div class="box"><p>Something went wrong.</p></div>'));
+    });
+  });
+  // Expired sessions and old rate-limit entries would otherwise pile up forever.
+  setInterval(() => {
+    const now = Date.now();
+    for (const [k, v] of sessions) if (v.expires < now) sessions.delete(k);
+    for (const [k, list] of attempts) if (list.every((t) => now - t > 60 * 60 * 1000)) attempts.delete(k);
+  }, 60 * 60 * 1000).unref();
+  server.listen(port, () => console.log(`Web: listening on ${port}`));
+  return server;
+}
+
+module.exports = { startWeb };

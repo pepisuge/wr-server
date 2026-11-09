@@ -146,13 +146,16 @@ function createHandlers(db) {
     if (user.status <= 0) return sendLoginError(socket, ERROR_CODES.banned);
 
     const sessionId = allocSessionId();
+    // Website single sign-on: a secret only this client gets. Client 22 stores the field it replaces ('NULL' upstream)
+    // at 0x935028 and never sends it back; the clan UI DLL reads it from there and opens /clan?t=<token>.
+    const webToken = crypto.randomBytes(16).toString('hex');
     const servers = getAllAuthorized();
     // Tell every game server which account owns this session before the client can reach them: game/handlers.js
     // accepts an Authorization only for a session announced here (the client's own userId/sessionId are spoofable).
-    for (const s of servers) s.socket.sendPacket(PLAYER_AUTHORIZATION, [sessionId, user.id, username, user.displayname]);
+    for (const s of servers) s.socket.sendPacket(PLAYER_AUTHORIZATION, [sessionId, user.id, username, user.displayname, webToken]);
 
     // Client 22 expects the C# reference's "1.11025 // PF_20" version field here (client 17 didn't).
-    const fields = [1, user.id, 0, username, 'NULL', user.displayname, sessionId, 1, 0, user.status, 1.11025, servers.length];
+    const fields = [1, user.id, 0, username, webToken, user.displayname, sessionId, 1, 0, user.status, 1.11025, servers.length];
     const gameIp = localIp(socket);
     for (const s of servers) fields.push(s.id, s.name, gameIp, PORTS.game, s.playerCount, s.type);
     fields.push(-1, -1, -1, -1, 0, 0);
@@ -164,4 +167,4 @@ function createHandlers(db) {
   return { [LAUNCHER]: handleLauncher, [SERVER_LIST]: handlePlayerLogin };
 }
 
-module.exports = { createHandlers, hashPassword };
+module.exports = { createHandlers, hashPassword, newScryptSalt, sameHash };
