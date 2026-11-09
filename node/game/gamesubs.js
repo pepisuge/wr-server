@@ -9,7 +9,7 @@ const { initExplosiveMatch } = require('./explosive');
 const { broadcastSystemMessage } = require('./chat');
 const { getItem, codeById, DEFAULT_ITEMS } = require('./items');
 const { ownsItem } = require('./inventory');
-const { markSpawn, fallDamaged, strike } = require('./anticheat');
+const { markSpawn, fallDamaged, strike, isTainted } = require('./anticheat');
 const { record } = require('./record');
 
 const GAME_PACKET = 0x7530;
@@ -469,6 +469,7 @@ const OPK_RANGE = 700; // live honest hits on a fast, collision-free bot: up to 
 
 function rejectHit(player, u, weapon, victim, now = Date.now(), impact = null) {
   if (!u.equipment?.[player.class]?.includes(weapon)) return 'weapon not in loadout';
+  if (isTainted(u)) return 'teleported or superjumped, hits ignored until respawn';
   const vp = users.get(victim.sessionId)?.pos;
   if (impact && (impact.x || impact.h || impact.z) && vp && now - vp.t < POS_MAX_AGE_MS) {
     const off = Math.hypot(impact.x - vp.x, impact.h - vp.h, impact.z - vp.z);
