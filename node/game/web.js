@@ -256,6 +256,16 @@ async function route(req, res, db, authDb) {
     if (!s) return redirect(res, '/login');
     return post ? clanAction(req, res, db, s) : clanPage(res, db, s);
   }
+  // Lobby user list emblems: the client fetches <id>.crc, and <id>.jpg only when the crc text changed (cached in
+  // texture/Avata). Unknown clan: 404, so the client falls back to DefaultClanMark.jpg.
+  const avatar = /^\/avatar\/(\d+)\.(jpg|crc)$/.exec(path);
+  if (avatar && !post) {
+    const c = clan.clans.get(Number(avatar[1]));
+    if (!c) return send(res, 404, 'no such clan');
+    const img = emblem(c.name);
+    res.writeHead(200, { 'Content-Type': avatar[2] === 'crc' ? 'text/plain' : 'image/bmp', 'Cache-Control': 'no-cache' });
+    return res.end(avatar[2] === 'crc' ? crypto.createHash('md5').update(img).digest('hex') : img);
+  }
   if (path === '/ClanAvatar.aspx' && !post) {
     const name = new URLSearchParams(req.url.split('?')[1] || '').get('Clan') || '';
     console.log(`web: clan emblem for "${name.slice(0, 40)}"`);
