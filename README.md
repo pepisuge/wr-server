@@ -10,26 +10,28 @@ Two processes: `auth-server.js` (login / server list) and `game-server.js` (room
 ## Project status
 
 > [!IMPORTANT]
-> Estimated completion per area, measured against the real client (**Client 22**). Last update: **2026-11-09**.
+> Estimated completion per area, measured against the real client (**Client 22**). Last update: **2026-11-10**.
 > "Done" means tested live with the real client, not only ported. Gaps link to their issue.
 
 | Area | Progress | Works | Missing |
 |---|---|---|---|
-| **Login server** | `█████████░` 90% | login, server list, launcher patch check, session handoff to Game, brute-force throttle, scrypt passwords | account registration ([#19](https://github.com/pepisuge/wr-server/issues/19)) |
+| **Login server** | `█████████▌` 95% | login, server list, launcher patch check, session handoff to Game, brute-force throttle, scrypt passwords, temporary bans, website sign-on token | configurable patch versions ([#25](https://github.com/pepisuge/wr-server/issues/25)) |
 | **Game server core** | `█████████░` 90% | authorization, channels, ping/liveness, UDP relay with endpoint checks, graceful shutdown | supervisor ([#22](https://github.com/pepisuge/wr-server/issues/22)) |
 | **Lobby system** | `████████▌░` 85% | channel select, room list and paging, user list, invites, quick join | |
-| **Room system** | `████████░░` 80% | create/join/leave, teams and slots, master handover, kick, settings (map, mode, rounds, ping), GM spectator | votekick ([#6](https://github.com/pepisuge/wr-server/issues/6)), autostart transition ([#10](https://github.com/pepisuge/wr-server/issues/10)) |
+| **Room system** | `████████▌░` 85% | create/join/leave, teams and slots, master handover (also by GM), kick, settings (map, mode, rounds, ping), GM spectator, GM-unlocked start, own clan emblem | votekick ([#6](https://github.com/pepisuge/wr-server/issues/6)), autostart transition ([#10](https://github.com/pepisuge/wr-server/issues/10)) |
 | **CQC** (infantry) | `████████░░` 80% | Explosive, Free-for-All, Team Deathmatch, per-weapon damage, heal, mines, medic/ammo boxes, artillery, scoreboard, XP/dinar | damage falloff ([#9](https://github.com/pepisuge/wr-server/issues/9)) |
 | **Urban Ops** | `█████░░░░░` 50% | everything in CQC on Urban maps | vehicles ([#5](https://github.com/pepisuge/wr-server/issues/5)), Conquest ([#4](https://github.com/pepisuge/wr-server/issues/4)) |
 | **Battle Group** | `███▌░░░░░░` 35% | infantry modes on Battle Group maps | vehicles ([#5](https://github.com/pepisuge/wr-server/issues/5)), Conquest ([#4](https://github.com/pepisuge/wr-server/issues/4)) |
-| **Chat system** | `████████░░` 80% | lobby, room, whisper, clan chat, mute, GM commands | team chat, English system messages ([#14](https://github.com/pepisuge/wr-server/issues/14)) |
-| **Clan system** | `███████▌░░` 75% | create, join/leave, ranks, members, ranking, clan chat, emblems, clan war declared from the site with results and points | real client UI check ([#12](https://github.com/pepisuge/wr-server/issues/12)), clan war accept/decline step |
+| **Chat system** | `████████░░` 80% | lobby, room, whisper, clan chat, mute, notice popup, impersonation/length/rate limits | team chat, English system messages ([#14](https://github.com/pepisuge/wr-server/issues/14)) |
+| **Clan system** | `████████▌░` 85% | create, join/leave, ranks (master-only), members, clan chat, emblems in lobby and rooms (gallery or upload), clan wars declared from the site with results, points and ranking; in game through the CLAN button (client mod) | clan war accept/decline ([#42](https://github.com/pepisuge/wr-server/issues/42)), native client dialogs ([#12](https://github.com/pepisuge/wr-server/issues/12)) |
 | **Shop & inventory** | `███████▌░░` 75% | buy (atomic), equipment and loadouts, coupons, rename and K/D reset items | renewal ([#8](https://github.com/pepisuge/wr-server/issues/8)), item effects ([#7](https://github.com/pepisuge/wr-server/issues/7)) |
 | **Progression** | `████████░░` 80% | XP, levels, level-up rewards, premium, boosters | |
-| **Anti-cheat (server side)** | `███████▌░░` 75% | weapon must be in the loadout, hit rate cap, knife range, attacker slot enforced, connection and packet limits | aim/headshot validation (needs map geometry) |
-| **Website** | `████░░░░░░` 40% | registration, login, clan list, clan management (also in game via `/url`) | referral ([#34](https://github.com/pepisuge/wr-server/issues/34)), rankings, HTTPS setup, final design |
+| **Anti-cheat (server side)** | `████████▌░` 85% | loadout, hit rate, knife range, attacker slot, connection/packet limits; speedhack (client clock and speed), teleport, superjump, no fall damage, OPK, hits ignored after a teleport until respawn; strikes, auto-kick, GM alerts | ammo, per-weapon fire rate, aim statistics, vehicles ([#41](https://github.com/pepisuge/wr-server/issues/41)); wallhack needs map geometry |
+| **GM tools** | `████████▌░` 85% | moderation (kick, mute, ban, temporary ban, warn), economy and items, room control (take/set master, unlock start, close, end, extend), info, anticheat strikes | English messages ([#14](https://github.com/pepisuge/wr-server/issues/14)) |
+| **Website** | `███████░░░` 70% | registration, login, sign-on from the game, clan management, emblem gallery and upload, clan war declaration, clan ranking | referral ([#34](https://github.com/pepisuge/wr-server/issues/34)), HTTPS setup, final design |
+| **Client mod** (client 22) | `████████░░` 80% | CLAN button with the site in a game-style window, sign-on, clan emblems from the server (live refresh), installer/uninstaller with checked patches | test on another PC and first release ([#43](https://github.com/pepisuge/wr-server/issues/43)) |
 
-**Overall: ~70%.** Open work is tracked in the [issues](https://github.com/pepisuge/wr-server/issues); protocol findings go to [`docs/protocol`](docs/protocol/index.md).
+**Overall: ~78%.** Open work is tracked in the [issues](https://github.com/pepisuge/wr-server/issues); protocol findings go to [`docs/protocol`](docs/protocol/index.md).
 
 ## Quick start
 ```bash
