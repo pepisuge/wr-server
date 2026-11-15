@@ -144,7 +144,6 @@ Good places to contribute:
 - **Conquest** mode, **vehicles** and artillery (`ObjectDamage`).
 - **Votekick**, item **renewal**, premium `cash` currency, `UseItem`/`RemoveItem` (stamina, HP kit effects).
 - **Damage falloff by distance**: no distance field identified in `PlayerDamage`.
-- **Autostart trigger**: the native countdown works, the transition does not.
 - **Invisible scripted player** ([UDP](udp#open-problem-the-invisible-fake-player)).
 - **Scoreboard assist column**: computed by the client, not drivable.
 - **UDP movement offset 33**: unknown.
