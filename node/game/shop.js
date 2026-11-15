@@ -78,20 +78,27 @@ function removeItem(db, u, code) {
 // account's displayname (masterserver.users), rejecting a collision the same
 // way the reference does (a plain SELECT check, no DB unique constraint on
 // this column either).
+// The unique index on users.displayname (sql/09, case-insensitive collation) is the only check: a separate SELECT
+// let two players racing for one name both pass. Memory changes only once the DB took it.
 async function renameDisplayname(u, nickname) {
   if (!authDb) return false;
-  const [existing] = await authDb.query('SELECT id FROM users WHERE displayname = ? AND id != ?', [nickname, u.id]);
-  if (existing.length) return false;
+  try {
+    await authDb.query('UPDATE users SET displayname = ? WHERE id = ?', [nickname, u.id]);
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return false;
+    throw err;
+  }
   u.displayname = nickname;
-  authDb
-    .query('UPDATE users SET displayname = ? WHERE id = ?', [nickname, u.id])
-    .catch((err) => console.error('shop: failed to persist nickname change:', err.message));
   return true;
 }
 
 // items.bin's `users.displayname` column is varchar(16); IsAlphaNumeric in
 // the reference has no length check of its own, just the column width.
 const NICKNAME_RE = /^[a-zA-Z0-9]{3,16}$/;
+// Names the server signs its own lines with (SYSTEM>> whispers, Notice>>, ClanSystem>>) or that pass for staff:
+// a player called "System" could whisper fake system messages.
+const RESERVED_RE = /^(gm|system|notice|clansystem|admin)/i;
+const validNickname = (name) => NICKNAME_RE.test(name) && !RESERVED_RE.test(name);
 
 // Replies are ToXiiC's SP_CashItemUse: [1111, 1, code, itemlist, slotState, ...per item]. A refusal is a whisper:
 // the reference just stays silent.
@@ -112,7 +119,7 @@ async function handleUseItem(socket, db, u, pkt) {
 
   if (itemCode === 'CB01') {
     const nickname = String(pkt.blocks[4] || '').trim();
-    if (!NICKNAME_RE.test(nickname)) return refuse('Nickname: 3-16 letters or digits.');
+    if (!validNickname(nickname)) return refuse('Nickname: 3-16 letters or digits, not a staff/system name.');
     const entry = u.inventory.get(itemCode);
     if (entry.busy) return; // a second packet while the first rename is still checking the name
     entry.busy = true;
@@ -194,4 +201,4 @@ function handleItemshop(db) {
   };
 }
 
-module.exports = { handleItemshop, handleCashItem, ITEMSHOP, CASH_ITEM, sendSuccess, grantItem, removeItem, setAuthDb };
+module.exports = { validNickname, handleItemshop, handleCashItem, ITEMSHOP, CASH_ITEM, sendSuccess, grantItem, removeItem, setAuthDb };

@@ -151,7 +151,8 @@ async function testShop() {
 async function testCashItemUse() {
   // Client 22 uses items through 0x7800 [1111, ?, ?, code, param] (live capture).
   let taken = false;
-  setAuthDb({ query: (sql) => Promise.resolve([sql.startsWith('SELECT') && taken ? [{ id: 9 }] : []]) });
+  // The unique index answers: a taken name (any case) is ER_DUP_ENTRY.
+  setAuthDb({ query: () => (taken ? Promise.reject(Object.assign(new Error('dup'), { code: 'ER_DUP_ENTRY' })) : Promise.resolve([{}])) });
   const own = (codes) => new Map(codes.map((c) => [c, { expireDate: Number.MAX_SAFE_INTEGER, retail: false }]));
   const use = (u, code, param = '') => handleCashItem(noDb)(u.socket, { blocks: [1111, 4, 6, code, param] });
   const u = mkUser({ inventory: own(['CB01', 'CB03']), kills: 5, deaths: 7 });
@@ -160,8 +161,8 @@ async function testCashItemUse() {
   await use(u, 'CB01', 'newnick');
   assert.ok(u.inventory.has('CB01') && u.displayname !== 'newnick', 'taken name: nothing spent');
   taken = false;
-  await use(u, 'CB01', 'no!');
-  assert.ok(u.inventory.has('CB01'), 'invalid name: nothing spent');
+  for (const bad of ['no!', 'System', 'SYSTEMx', 'GM_Bob', 'gmbob', 'Notice', 'Admin1']) await use(u, 'CB01', bad);
+  assert.ok(u.inventory.has('CB01') && u.displayname.startsWith('p'), 'invalid or reserved name: nothing spent');
   await Promise.all([use(u, 'CB01', 'newnick'), use(u, 'CB01', 'other')]);
   assert.strictEqual(u.displayname, 'newnick', 'one item, one rename');
   assert.ok(!u.inventory.has('CB01'));
