@@ -640,12 +640,16 @@ function suicideDeath(player, u, db) {
 }
 
 // Bleeding, ported from ToXiiC Room.cs's room thread (neither client 22 nor Chapter-1 does it, live): every 10 s an alive
-// player under 300 HP loses 5 (25 on channel 2) unless they own the compressed bandage CH01. Sent like environment
-// damage (sub 500 [_, _, 1, _, _, dmg, _, dmg, health], the shape a fall gets); bleeding out is a Suicide with type 1
-// ("killed by not having heal treatment" in ToXiiC's SP_EntitySuicide). Called once a second by the round timer.
+// player under 300 HP loses 5 (25 on channel 2) unless they own the compressed bandage CH01. The new health goes out
+// silently in ROOM_HEALTH (0x7541, ToXiiC's SP_RoomInitializeUsers), client 22 layout (FUN_005f3cc0): [n, (slot, health,
+// vehicle, seat) x n, vehicles, vehicle health x vehicles]. Environment damage (sub 500) also sets health but prints
+// "N% damage from falling/shock/(ASSERT)" (live). Bleeding out is a Suicide with type 1 ("killed by not having heal
+// treatment" in ToXiiC's SP_EntitySuicide). Called once a second by the round timer.
+const ROOM_HEALTH = 0x7541;
 const BLEED_BELOW = 300;
 const BLEED_EVERY = 10;
 function bleed(room, db) {
+  let changed = false;
   for (const p of room.players.values()) {
     if (!p.alive || !(p.health > 0 && p.health < BLEED_BELOW)) { p.bleedTicks = 0; continue; }
     p.bleedTicks = (p.bleedTicks || 0) + 1;
@@ -654,16 +658,17 @@ function bleed(room, db) {
     const u = users.get(p.sessionId);
     if (!u || ownsItem(u.inventory, 'CH01')) continue;
     const dmg = room.channel === 2 ? 25 : 5;
-    let sub = SUB.ENVIRONMENT_DAMAGE;
-    let payload = [0, 0, 1, 0, 0, dmg, 0, dmg, Math.max(0, p.health - dmg)];
-    if (p.health > dmg) p.health -= dmg;
-    else {
-      suicideDeath(p, u, db);
-      sub = SUB.SUICIDE;
-      payload = [0, 1, p.slot, 0, 0, dmg, 0, dmg, 0];
+    if (p.health > dmg) {
+      p.health -= dmg;
+      changed = true;
+      continue;
     }
-    broadcastPacket(roomSockets(room), XOR.external, GAME_PACKET, [1, p.slot, room.id, 2, sub, ...payload]);
+    suicideDeath(p, u, db);
+    broadcastPacket(roomSockets(room), XOR.external, GAME_PACKET, [1, p.slot, room.id, 2, SUB.SUICIDE, 0, 1, p.slot, 0, 0, dmg, 0, dmg, 0]);
   }
+  if (!changed) return;
+  const players = [...room.players.values()];
+  broadcastPacket(roomSockets(room), XOR.external, ROOM_HEALTH, [players.length, ...players.flatMap((p) => [p.slot, p.health, -1, -1]), 0]);
 }
 
 function handleSuicide(room, player, payload, u, db) {

@@ -137,7 +137,7 @@ Every player starts at `health = 1000` in all modes (confirmed in both reference
 
 ### Bleeding
 
-Server-side, ported from ToXiiC's room thread: client 22 does not bleed by itself (live). Every 10 s an alive player under 300 HP loses 5 (25 on channel 2), unless they own the compressed bandage `CH01`. It goes out as environment damage (sub 500 `[_, _, 1, _, _, dmg, _, dmg, health]`, the shape a fall gets); bleeding out is a Suicide (157) with type 1 in `payload[1]` (ToXiiC: "killed by not having heal treatment"). (needs live test)
+Server-side, ported from ToXiiC's room thread: client 22 does not bleed by itself (live). Every 10 s an alive player under 300 HP loses 5 (25 on channel 2), unless they own the compressed bandage `CH01`. The new health goes out silently in `ROOM_HEALTH` (`0x7541` = 30017, ToXiiC's `SP_RoomInitializeUsers`), client 22 layout (`FUN_005f3cc0`): `[n, (slot, health, vehicle, seat) x n, vehicles, vehicle health x vehicles]` (no extra `-1` per player as in ToXiiC's later chapters). Environment damage (sub 500) also sets the health (`payload[8]`) but always prints a message by `payload[3]`: `2` = " damage from falling" (`m67`), `4` = " damage from shock" (`m68`), anything else "Damage from (ASSERT)" (`m69`) (live, `FUN_004de150`). Bleeding out is a Suicide (157) with type 1 in `payload[1]` (ToXiiC: "killed by not having heal treatment"). (needs live test)
 
 ### Death and friendly fire
 
