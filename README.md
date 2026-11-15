@@ -10,7 +10,7 @@ Two processes: `auth-server.js` (login / server list) and `game-server.js` (room
 ## Project status
 
 > [!IMPORTANT]
-> Estimated completion per area, measured against the real client (**Client 22**). Last update: **2026-11-10**.
+> Estimated completion per area, measured against the real client (**Client 22**). Last update: **2026-11-15**.
 > "Done" means tested live with the real client, not only ported. Gaps link to their issue.
 
 | Area | Progress | Works | Missing |
@@ -18,7 +18,7 @@ Two processes: `auth-server.js` (login / server list) and `game-server.js` (room
 | **Login server** | `█████████▌` 95% | login, server list, launcher patch check, session handoff to Game, brute-force throttle, scrypt passwords, temporary bans, website sign-on token | configurable patch versions ([#25](https://github.com/pepisuge/wr-server/issues/25)) |
 | **Game server core** | `█████████░` 90% | authorization, channels, ping/liveness, UDP relay with endpoint checks, graceful shutdown | supervisor ([#22](https://github.com/pepisuge/wr-server/issues/22)) |
 | **Lobby system** | `████████▌░` 85% | channel select, room list and paging, user list, invites, quick join | |
-| **Room system** | `████████▌░` 85% | create/join/leave, teams and slots, master handover (also by GM), kick, settings (map, mode, rounds, ping), GM spectator, GM-unlocked start, own clan emblem | votekick ([#6](https://github.com/pepisuge/wr-server/issues/6)), autostart transition ([#10](https://github.com/pepisuge/wr-server/issues/10)) |
+| **Room system** | `██████████` 100% | create/join/leave, teams and slots, master handover (also by GM), kick, votekick, autostart, settings (map, mode, rounds, ping), GM spectator, GM-unlocked start, own clan emblem | |
 | **CQC** (infantry) | `████████░░` 80% | Explosive, Free-for-All, Team Deathmatch, per-weapon damage, heal, mines, medic/ammo boxes, artillery, scoreboard, XP/dinar | damage falloff ([#9](https://github.com/pepisuge/wr-server/issues/9)) |
 | **Urban Ops** | `█████░░░░░` 50% | everything in CQC on Urban maps | vehicles ([#5](https://github.com/pepisuge/wr-server/issues/5)), Conquest ([#4](https://github.com/pepisuge/wr-server/issues/4)) |
 | **Battle Group** | `███▌░░░░░░` 35% | infantry modes on Battle Group maps | vehicles ([#5](https://github.com/pepisuge/wr-server/issues/5)), Conquest ([#4](https://github.com/pepisuge/wr-server/issues/4)) |
