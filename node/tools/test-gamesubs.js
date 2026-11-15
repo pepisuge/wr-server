@@ -3,7 +3,8 @@ const assert = require('assert');
 const { loadConfig } = require('../lib/config');
 const { createPool } = require('../lib/db');
 const { loadItems } = require('../game/items');
-const { HANDLERS, SUB } = require('../game/gamesubs');
+const { HANDLERS, SUB, bleed } = require('../game/gamesubs');
+const { users } = require('../game/state');
 
 (async () => {
   const config = loadConfig ? loadConfig() : require('../lib/config');
@@ -57,6 +58,21 @@ const { HANDLERS, SUB } = require('../game/gamesubs');
   assert.strictEqual(stepFlash(g), null, 'own flash mine');
   assert.strictEqual(stepFlash(mate), null, 'teammate');
   assert.strictEqual(stepFlash(enemy).payload[3], enemy.slot, 'an enemy is flashed');
-  console.log('OK: heal + environment damage + ground items + artillery');
+
+  // Bleeding: under 300 HP, -5 every 10 s, none with CH01, bleeding out is a death.
+  const br = room(); br.id = 3; br.channel = 1;
+  const bled = mk(0, 0, { health: 250, sessionId: 901 }), banded = mk(1, 0, { health: 250, sessionId: 902 }), fine = mk(2, 1, { health: 300, sessionId: 903 });
+  [bled, banded, fine].forEach((p) => br.players.set(p.sessionId, p));
+  users.set(901, { deaths: 0, inventory: new Map() });
+  users.set(902, { deaths: 0, inventory: new Map([['CH01', { expireDate: 9e9, retail: false }]]) });
+  users.set(903, { deaths: 0, inventory: new Map() });
+  for (let i = 0; i < 9; i++) bleed(br, noDb);
+  assert.strictEqual(bled.health, 250, 'nothing before 10 s');
+  bleed(br, noDb);
+  assert.deepStrictEqual([bled.health, banded.health, fine.health], [245, 250, 300]);
+  bled.health = 4;
+  for (let i = 0; i < 10; i++) bleed(br, noDb);
+  assert.deepStrictEqual([bled.alive, bled.health, bled.deaths], [false, 0, 1], 'bled out');
+  console.log('OK: heal + environment damage + ground items + artillery + bleeding');
   await db.end();
 })().catch((e) => { console.error(e); process.exit(1); });

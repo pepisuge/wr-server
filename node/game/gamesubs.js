@@ -639,6 +639,33 @@ function suicideDeath(player, u, db) {
   );
 }
 
+// Bleeding, ported from ToXiiC Room.cs's room thread (neither client 22 nor Chapter-1 does it, live): every 10 s an alive
+// player under 300 HP loses 5 (25 on channel 2) unless they own the compressed bandage CH01. Sent like environment
+// damage (sub 500 [_, _, 1, _, _, dmg, _, dmg, health], the shape a fall gets); bleeding out is a Suicide with type 1
+// ("killed by not having heal treatment" in ToXiiC's SP_EntitySuicide). Called once a second by the round timer.
+const BLEED_BELOW = 300;
+const BLEED_EVERY = 10;
+function bleed(room, db) {
+  for (const p of room.players.values()) {
+    if (!p.alive || !(p.health > 0 && p.health < BLEED_BELOW)) { p.bleedTicks = 0; continue; }
+    p.bleedTicks = (p.bleedTicks || 0) + 1;
+    if (p.bleedTicks < BLEED_EVERY) continue;
+    p.bleedTicks = 0;
+    const u = users.get(p.sessionId);
+    if (!u || ownsItem(u.inventory, 'CH01')) continue;
+    const dmg = room.channel === 2 ? 25 : 5;
+    let sub = SUB.ENVIRONMENT_DAMAGE;
+    let payload = [0, 0, 1, 0, 0, dmg, 0, dmg, Math.max(0, p.health - dmg)];
+    if (p.health > dmg) p.health -= dmg;
+    else {
+      suicideDeath(p, u, db);
+      sub = SUB.SUICIDE;
+      payload = [0, 1, p.slot, 0, 0, dmg, 0, dmg, 0];
+    }
+    broadcastPacket(roomSockets(room), XOR.external, GAME_PACKET, [1, p.slot, room.id, 2, sub, ...payload]);
+  }
+}
+
 function handleSuicide(room, player, payload, u, db) {
   if (room.state !== 2 || !player.alive || room.mode === FFA_MODE || room.mode === 0) return null;
 
@@ -918,4 +945,4 @@ function handleGamePacket(socket, pkt, db) {
   if (result.checkAutoStart) tryAutoStart(room, db);
 }
 
-module.exports = { handleGamePacket, GAME_PACKET, handleScoreboardRequest, SCOREBOARD, HANDLERS, SUB };
+module.exports = { bleed, handleGamePacket, GAME_PACKET, handleScoreboardRequest, SCOREBOARD, HANDLERS, SUB };

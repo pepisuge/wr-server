@@ -135,6 +135,10 @@ Knives and rockets (`DA`/`DJ`/`DK`) never count as headshots. The headshot flag 
 
 Every player starts at `health = 1000` in all modes (confirmed in both references).
 
+### Bleeding
+
+Server-side, ported from ToXiiC's room thread: client 22 does not bleed by itself (live). Every 10 s an alive player under 300 HP loses 5 (25 on channel 2), unless they own the compressed bandage `CH01`. It goes out as environment damage (sub 500 `[_, _, 1, _, _, dmg, _, dmg, health]`, the shape a fall gets); bleeding out is a Suicide (157) with type 1 in `payload[1]` (ToXiiC: "killed by not having heal treatment"). (needs live test)
+
 ### Death and friendly fire
 
 - On death: `alive=false`, `deaths++`, `kills++` for the attacker, persisted fire-and-forget.

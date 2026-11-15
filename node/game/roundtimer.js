@@ -54,6 +54,7 @@ function startRoundTimer(room, db) {
       stopRoundTimer(room);
       return;
     }
+    if (!room.freezeTick) require('./gamesubs').bleed(room, db); // lazy: gamesubs requires this module
 
     // Explosive drives its own round-by-round state machine (bomb, per-round
     // win, the 5s inter-round gate) - see explosive.js. FreezeTick mirrors
