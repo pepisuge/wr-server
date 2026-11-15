@@ -73,7 +73,7 @@ GameSub 61, header type 2 (`game/votekick.js`). Protocol from WarRock-ToXiiC-Cor
 
 | Direction | `payload[2]` | Other fields | Meaning |
 |---|---|---|---|
-| C -> S | 0 | `[3]` target slot | request (expected from the reference, not captured yet) |
+| C -> S | 0 | `[3]` target slot | request, captured: `[0, 0, 2, 61, 1, 0, 0, 3, 0, ...]` |
 | S -> target's team | 1 | `[3]` target, `[6]` requester | vote open: "X has requested to votekick Y", 30 s, [Y]/[N] |
 | C -> S | 1 | `[3]` target | **Y** pressed. **N** sends nothing, so every vote received is a yes |
 | S -> target's team | 2 | `[3]` target, `[5]` | result: `[5] >= 80` shows "has been kicked" (the reference's 75 would show "was not kicked" on this client) |

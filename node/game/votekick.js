@@ -1,5 +1,5 @@
 // Votekick (GameSub 61), protocol from WarRock-ToXiiC-Core's RoomHandler_VoteKick checked against client 22:
-// - request: payload[2]=0, payload[3]=target slot (the room's player menu);
+// - request: payload[2]=0, payload[3]=target slot (captured: [0, 0, 2, 61, 1, 0, 0, 3, 0...]);
 // - the server opens the vote to the target's team: payload[2]=1, [3]=target, [6]=requester (FUN_004e45a0);
 // - Y sends payload[2]=1, [3]=target; N sends nothing (FUN_005dcf.. key handler), so every vote received is a yes;
 // - result to the same team: payload[2]=2, [3]=target, [5]>=80 shows "has been kicked", below it "was not kicked".
