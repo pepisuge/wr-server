@@ -47,6 +47,7 @@ permalink: /protocol/reference
 | `0x7530` | 30000 | `GAME_PACKET` (GameSub container) | both |
 | `0x7531` | 30001 | `GAME_COUNTDOWN` (dead code in the C#, live in the client) | S->C |
 | `0x7540` | 30016 | `GAME_TICK` (1/s heartbeat) | S->C |
+| `0x7541` | 30017 | `ROOM_HEALTH`: every player's health, no message (bleeding) | S->C |
 | `0x7550` | 30032 | `SCOREBOARD` (Tab key, top-level) | both |
 | `0x7560` | 30048 | `END_GAME` (top-level) | S->C |
 | `0x7600` | 30208 | `ITEMSHOP` (purchase, item coupon reply) | both |
