@@ -38,9 +38,10 @@ The message is `"<nick>>>\x1D<text>"` with spaces already escaped.
 | 2 | Notice2 | **notice popup**; `/notice` uses it for players in the lobby |
 | 3 | LobbyToChannel | chat line |
 | 4 | Room_ToAll | chat line; colour by `targetId` (below) |
+| 5 | Room_ToTeam | light blue chat line (yellow with `targetId=999`), sent only to the sender's team and to spectators; ignored in FFA |
 | 6 | Whisper | private chat line |
 | 8 | LobbyToAll | chat line |
-| 10 | Clan | clan chat line |
+| 10 | Clan | light green chat line, shown only when `targetId` is the reader's own clan id (the real client sends it; the server stamps the sender's clan id) |
 
 - **Client 22 handler** (decompiled `0x7400`, `FUN_005edcd0`): it prints the **message field as-is**, so the `Nick>> ` prefix is whatever the sender wrote. The server therefore rebuilds it from the sender's real nickname before forwarding.
 - Room line colour (type 4, outside a match) by `targetId`: `999` yellow (system), `997`/`998` light blue (used for GM lines), anything else white. During a match lines use team colours.

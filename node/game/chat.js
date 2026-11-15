@@ -4,12 +4,14 @@ const { getChannel, lobbyUsersIn, users, roomSockets } = require('./state');
 const { handleGmCommand } = require('./gm');
 
 const CHAT = 0x7400;
+const FFA_MODE = 1;
 
 const TYPE = {
   NOTICE1: 1,
   NOTICE2: 2,
   LOBBY_TO_CHANNEL: 3,
   ROOM_TO_ALL: 4,
+  ROOM_TO_TEAM: 5,
   WHISPER: 6,
   LOBBY_TO_ALL: 8,
   CLAN: 10,
@@ -39,9 +41,8 @@ function extractText(rawMessage) {
   return rawMessage.slice(idx + marker.length).split('\x1D').join(' ');
 }
 
-// Ported from Game/Handlers/Chat.cs. Skips Room_ToTeam (no per-team chat
-// scoping yet) and the /cris command branch (Cristina subsystem is out of
-// scope) - unrecognized/out-of-scope types are silently ignored.
+// Ported from Game/Handlers/Chat.cs. Skips the /cris command branch (Cristina subsystem is out of scope);
+// unrecognized types are silently ignored.
 function handleChat(socket, pkt, db) {
   const u = socket.user;
   if (!u) return;
@@ -96,6 +97,18 @@ function handleChat(socket, pkt, db) {
       broadcast(roomSockets(room), fields);
       break;
     }
+    case TYPE.ROOM_TO_TEAM: {
+      // Only the sender's team hears it. FFA has no teams (Chat.cs disconnects there; ignoring is enough).
+      if (u.roomId === null) return socket.end();
+      const room = getChannel(u.channel).rooms.get(u.roomId);
+      const me = room?.players.get(u.sessionId);
+      if (!me || room.mode === FFA_MODE) return;
+      if (u.isGm) fields[4] = GM_TARGET;
+      // Spectators see both teams' lines, as in ToXiiC's Chat.cs.
+      const sids = [...room.players.values()].filter((p) => p.team === me.team).map((p) => p.sessionId);
+      broadcast([...sids, ...(room.spectators?.keys() ?? [])].map((sid) => users.get(sid)?.socket).filter(Boolean), fields);
+      break;
+    }
     case TYPE.WHISPER: {
       const target = [...users.values()].find((x) => x.displayname === targetName);
       if (target) {
@@ -108,6 +121,7 @@ function handleChat(socket, pkt, db) {
     }
     case TYPE.CLAN: {
       if (u.clanId <= 0) return;
+      fields[4] = u.clanId; // the client drops a clan line unless targetId is its own clan id (the real client sends it)
       const sockets = [...users.values()].filter((x) => x.clanId === u.clanId).map((x) => x.socket);
       broadcast(sockets, fields);
       break;

@@ -1,4 +1,4 @@
-// Runnable check for rooms.js (join/leave/master/kick) and shop.js (price, lease, money, double buy). No DB needed:
+// Runnable check for rooms.js (join/leave/master/kick), votekick, team chat and shop.js (price, lease, money, double buy). No DB needed:
 // node tools/test-rooms-shop.js
 const assert = require('assert');
 const { users } = require('../game/state');
@@ -11,7 +11,7 @@ function mkUser(o = {}) {
   const socket = {
     out: [], raw: 0, ended: false, destroyed: false,
     sendPacket(id, fields) { this.out.push({ id, fields }); },
-    write() { this.raw++; },
+    write(buf) { this.raw++; this.lastBuf = buf; },
     end() { this.ended = true; },
     last(id) { return [...this.out].reverse().find((p) => p.id === id)?.fields; },
   };
@@ -165,6 +165,30 @@ function testVoteKick() {
   console.log('OK: votekick');
 }
 
+function testTeamChat() {
+  const { handleChat } = require('../game/chat');
+  const room = { id: 8, channel: 1, mode: 2, state: 2, maxPlayers: 16, players: new Map(), spectators: new Map() };
+  require('../game/state').getChannel(1).rooms.set(8, room);
+  const add = (slot, team) => { const u = mkUser({ roomId: 8 }); room.players.set(u.sessionId, { sessionId: u.sessionId, slot, team }); return u; };
+  const [a, b, e] = [add(0, 0), add(1, 0), add(8, 1)];
+  const spec = mkUser({ roomId: 8 }); room.spectators.set(spec.sessionId, 1);
+  const raw = () => [a, b, e, spec].map((u) => u.socket.raw);
+  const say = () => handleChat(a.socket, { blocks: [5, 0, 'NULL', 'x>>hi'] });
+  let before = raw(); say();
+  assert.deepStrictEqual(raw().map((n, i) => n - before[i]), [1, 1, 0, 1], 'team + spectators only');
+  room.mode = 1; before = raw(); say();
+  assert.deepStrictEqual(raw(), before, 'no team chat in FFA');
+
+  // Clan chat: the server stamps the sender's clan id as targetId, whatever the sender put there.
+  a.clanId = 14; b.clanId = 14;
+  handleChat(a.socket, { blocks: [10, 0, 'NULL', 'x>>hi'] });
+  const { xorBuffer, parsePacket } = require('../lib/packet');
+  const line = parsePacket(xorBuffer(b.socket.lastBuf, require('../lib/constants').XOR.external.send));
+  assert.deepStrictEqual([line.blocks[3], line.blocks[4]], ['10', '14'], 'clan line carries the clan id');
+  console.log('OK: team chat');
+}
+
 testRooms();
 testVoteKick();
+testTeamChat();
 testShop().then(() => process.exit(0), (e) => { console.error(e); process.exit(1); });
