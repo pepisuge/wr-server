@@ -176,6 +176,15 @@ async function testCashItemUse() {
   const sent = u.socket.out.length;
   await use(u, 'CB03');
   assert.strictEqual(u.socket.out.length, sent, 'not owned any more: ignored');
+
+  // CB03 comes on ITEMSHOP instead (live: [1111, CB03, 6, 7, -1]); the reply is the buy shape with action 1111.
+  const shop = handleItemshop(noDb);
+  const w = mkUser({ inventory: own(['CB03']), kills: 5, deaths: 7, money: 42 });
+  shop(w.socket, { blocks: [1111, 'CB03', 6, 7, -1] });
+  assert.deepStrictEqual([w.kills, w.deaths, w.inventory.has('CB03')], [0, 0, false]);
+  assert.deepStrictEqual(w.socket.last(ITEMSHOP).slice(0, 4), [1, 1111, -1, 3]);
+  shop(w.socket, { blocks: [1111, 'CB03', 6, 7, -1] });
+  assert.deepStrictEqual(w.socket.last(ITEMSHOP), [97010], 'not owned any more');
   console.log('OK: cash item use');
 }
 
