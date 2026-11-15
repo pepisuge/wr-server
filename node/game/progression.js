@@ -123,15 +123,17 @@ function checkPremiumExpiry(db, user, nowSeconds = Math.floor(Date.now() / 1000)
   return true;
 }
 
-// CC03/CC04 (UP_EXP/UP_DINAR): real item codes, but never wired to any
-// multiplier in either C# reference - ToXiiC-Core's gameserver.xml even has
-// <EXPBonus>0.3</EXPBonus>/<DinarBonus>0.3</DinarBonus>, but no .cs file
-// reads them. Self-designed from here down (not a port - see the guide):
-// reusing those same 0.3 reference values rather than inventing new ones,
-// applied for as long as the item is owned (same leased-item mechanic as
-// everything else in the shop, no separate activate/consume step needed).
-const BOOSTER_XP_BONUS = 0.3;
-const BOOSTER_DINAR_BONUS = 0.3;
+// Owned booster items: [xp bonus, dinar bonus], added up. CD01/CD02/CE01/CE02/CC05 are Player.cs's values (Chapter-1).
+// CC03/CC04 (UP_EXP/UP_DINAR) are wired in neither reference; they use ToXiiC's unread gameserver.xml EXPBonus/DinarBonus 0.3.
+const BOOSTERS = { CC03: [0.3, 0], CC04: [0, 0.3], CC05: [0.25, 0.25], CD01: [0.3, 0], CD02: [0.2, 0], CE01: [0, 0.2], CE02: [0, 0.3] };
+
+function boosterBonus(inventory) {
+  const bonus = [0, 0];
+  for (const [code, [xp, dinar]] of Object.entries(BOOSTERS)) {
+    if (ownsItem(inventory, code)) { bonus[0] += xp; bonus[1] += dinar; }
+  }
+  return bonus;
+}
 
 // Ported from Player.cs's scoring branch + User.cs's EndGame(). points
 // defaults to 0 (a mid-match room-leave with no kills to show for it);
@@ -140,8 +142,9 @@ const BOOSTER_DINAR_BONUS = 0.3;
 // only persists money from this path - persisting xp too is a deliberate
 // fix, otherwise levels would never survive a restart).
 function applyMatchEnd(db, user, points = 0) {
-  const expRate = 1 + premiumXpBonus(user.premium) + (ownsItem(user.inventory, 'CC03') ? BOOSTER_XP_BONUS : 0);
-  const dinarRate = 1 + (ownsItem(user.inventory, 'CC04') ? BOOSTER_DINAR_BONUS : 0);
+  const [xpBonus, dinarBonus] = boosterBonus(user.inventory);
+  const expRate = 1 + premiumXpBonus(user.premium) + xpBonus;
+  const dinarRate = 1 + dinarBonus;
 
   const xpEarned = Math.ceil((20 + points * 4 * expRate) * GameConfig.expRate);
   const moneyEarned = Math.ceil((50 + points * 3 * dinarRate) * GameConfig.dinarRate);

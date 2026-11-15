@@ -1,4 +1,4 @@
-// Runnable check for rooms.js (join/leave/master/kick), votekick, team chat and shop.js (price, lease, money, double buy). No DB needed:
+// Runnable check for rooms.js (join/leave/master/kick), votekick, team chat, boosters and shop.js (price, lease, money, double buy). No DB needed:
 // node tools/test-rooms-shop.js
 const assert = require('assert');
 const { users } = require('../game/state');
@@ -188,7 +188,22 @@ function testTeamChat() {
   console.log('OK: team chat');
 }
 
+function testBoosters() {
+  const { applyMatchEnd } = require('../game/progression');
+  const now = Math.floor(Date.now() / 1000);
+  const own = (codes, expireDate = now + 3600) => new Map(codes.map((c) => [c, { expireDate, retail: false }]));
+  // No boosters: 20 + 10*4 xp, 50 + 10*3 dinar.
+  assert.deepStrictEqual(applyMatchEnd(noDb, { xp: 0, money: 0, premium: 0, inventory: own([]) }, 10), { xpEarned: 60, moneyEarned: 80, levelUp: null });
+  // CD01 (+30% xp) + CC05 (+25% both) add up; an expired CE01 counts for nothing.
+  const inventory = own(['CD01', 'CC05']);
+  inventory.set('CE01', { expireDate: now - 1, retail: false });
+  const r = applyMatchEnd(noDb, { xp: 0, money: 0, premium: 0, inventory }, 10);
+  assert.deepStrictEqual([r.xpEarned, r.moneyEarned], [82, 88]);
+  console.log('OK: boosters');
+}
+
 testRooms();
+testBoosters();
 testVoteKick();
 testTeamChat();
 testShop().then(() => process.exit(0), (e) => { console.error(e); process.exit(1); });

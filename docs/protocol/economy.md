@@ -14,7 +14,19 @@ XP is earned at end of match and when leaving a `Playing` room:
 xp = ceil((20 + points x 4 x premiumRate) x expRate)        points = kills
 ```
 
-Rates come from the `gameconfig` table (`expRate`, `dinarRate`, `levelup_base_reward`). The premium bonus multiplies only the `points x 4` term. Crossing a threshold sends `LevelUp` (`0x7920` = 31008) and pays the level-up reward. Room level limits (1-10, 11+, 21+, 31+, 41+) are enforced on create/join.
+Rates come from the `gameconfig` table (`expRate`, `dinarRate`, `levelup_base_reward`). The premium bonus multiplies only the `points x 4` term. Owned booster items add to that term (dinar: to `points x 3`), as long as the lease runs; no activation step:
+
+| item | XP | dinar | source |
+|---|---|---|---|
+| `CD01` / `CD02` | +30% / +20% | | Chapter-1 `Player.cs` |
+| `CE01` / `CE02` | | +20% / +30% | Chapter-1 `Player.cs` |
+| `CC05` DoubleUp | +25% | +25% | Chapter-1 `Player.cs` |
+| `CC03` UP_EXP | +30% | | our own (unwired in both references) |
+| `CC04` UP_DINAR | | +30% | our own (unwired in both references) |
+
+The other extras need nothing from the server beyond the inventory list: client 22 (`FUN_004c2d60`) checks the owned codes `CF01` (stamina x1.2), `CF02`, `CJ01`/`CJ02` (extra magazines), `CG01`/`CG02` (scopes) and `CH01` (bandage) itself. `CF01` and `CJ01` verified live. `CI01` (RELOAD_UP) appears nowhere in the client: no effect, and `item_shop` already has it unbuyable.
+
+Crossing a threshold sends `LevelUp` (`0x7920` = 31008) and pays the level-up reward. Room level limits (1-10, 11+, 21+, 31+, 41+) are enforced on create/join.
 
 **Persistence pattern used everywhere**: update **memory first** (source of truth for immediate replies), then write to the DB fire-and-forget. Handlers that `await` the DB before touching shared state race with the next packet from the same client.
 
