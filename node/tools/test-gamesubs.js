@@ -50,6 +50,13 @@ const { HANDLERS, SUB } = require('../game/gamesubs');
   HANDLERS[SUB.USE_ITEM](r, g, [0, 0, 0, 0, 1, 0, 0, ...Array(15).fill(0), 'DV01'], gu, noDb); assert.strictEqual(g.health, 1000);
   assert.strictEqual(HANDLERS[SUB.ARTILLERY](r, g, [0, 0, 0, 0], gu, noDb).payload[3], 1);
   inv.delete('DX01'); assert.strictEqual(HANDLERS[SUB.ARTILLERY](r, g, [0, 0, 0, 0], gu, noDb), null);
+  // Flash mine: like the land mine, it never goes off for its owner or a teammate (it blinded its own planter, live).
+  inv.set('DS05', { expireDate: 9e9, retail: false });
+  const flashId = place('DS05').payload[4];
+  const stepFlash = (who) => HANDLERS[SUB.USE_ITEM](r, who, [0, 0, 0, 0, flashId, 0, 0, ...Array(15).fill(0), 'DS05'], gu, noDb);
+  assert.strictEqual(stepFlash(g), null, 'own flash mine');
+  assert.strictEqual(stepFlash(mate), null, 'teammate');
+  assert.strictEqual(stepFlash(enemy).payload[3], enemy.slot, 'an enemy is flashed');
   console.log('OK: heal + environment damage + ground items + artillery');
   await db.end();
 })().catch((e) => { console.error(e); process.exit(1); });
