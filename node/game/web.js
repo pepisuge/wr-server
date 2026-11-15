@@ -12,7 +12,7 @@ const emblems = require('./emblems');
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
 const MAX_BODY = 4096;
 const USERNAME_RE = /^[A-Za-z0-9]{3,20}$/; // users.username varchar(20); the login accepts only alphanumerics
-const NICKNAME_RE = /^[A-Za-z0-9]{3,16}$/; // same rule as the in-game rename (shop.js)
+const { validNickname } = require('./shop'); // same rule as the in-game rename
 // In game the lobby user list is re-sent at once; players without the clan UI DLL see it after restarting the game.
 const EMBLEM_CHANGED = 'Emblem changed. In game it shows in a few seconds (with the clan UI mod; otherwise after restarting the game).';
 const RANK_NAME = { 0: 'Member', 1: 'Officer', 2: 'Master', 9: 'Applicant' };
@@ -112,7 +112,7 @@ async function register(req, res, authDb, ip) {
   const b = await readBody(req);
   const [username, nickname, password] = [b.get('username') || '', b.get('nickname') || '', b.get('password') || ''];
   if (!USERNAME_RE.test(username)) return registerPage(res, 'Invalid username.');
-  if (!NICKNAME_RE.test(nickname)) return registerPage(res, 'Invalid nickname.');
+  if (!validNickname(nickname)) return registerPage(res, 'Invalid nickname (3-16 letters or digits, not a staff/system name).');
   // 16: what the client's login field takes; a longer password could never be typed in game.
   if (password.length < 6 || password.length > 16) return registerPage(res, 'The password must be 6-16 characters.');
   if (password !== b.get('password2')) return registerPage(res, 'The passwords do not match.');

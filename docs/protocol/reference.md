@@ -50,6 +50,7 @@ permalink: /protocol/reference
 | `0x7550` | 30032 | `SCOREBOARD` (Tab key, top-level) | both |
 | `0x7560` | 30048 | `END_GAME` (top-level) | S->C |
 | `0x7600` | 30208 | `ITEMSHOP` (purchase, item coupon reply) | both |
+| `0x7800` | 30720 | `CASH_ITEM`: client 22 sends only item use (`1111`) here | both |
 | `0x7920` | 31008 | `LEVEL_UP` | S->C |
 | `0x8100` | 33024 | `COUPON` | both |
 
