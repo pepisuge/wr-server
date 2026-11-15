@@ -262,7 +262,7 @@ function tryAutoStart(room) {
       // countdown UI; what completes the transition at 0, if anything short
       // of a real click can, is unknown.
       sendCountdownPacket(0);
-      broadcastSystemMessage(room, 'Tempo scaduto! Il master deve premere Start per iniziare.');
+      broadcastSystemMessage(room, "Time's up! The master must press Start to begin.");
       return;
     }
     broadcastSystemMessage(room, String(remaining));
