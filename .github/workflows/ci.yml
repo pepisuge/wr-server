@@ -24,6 +24,8 @@ jobs:
         run: find node -name '*.js' -not -path '*/node_modules/*' -print0 | xargs -0 -n1 node --check
       - name: Trust-boundary tests (no DB)
         run: node node/tools/test-hardening.js
+      - name: Rooms and shop (no DB)
+        run: node node/tools/test-rooms-shop.js
       - name: Forbidden files
         run: |
           if git ls-files | grep -Ei '\.(exe|dll|rar|zip|7z|dds|tga|bin|pak|dmp|wrf)$|items\.bin|weapondata|\.env$'; then exit 1; fi
