@@ -16,7 +16,8 @@ const DEFAULT_EQUIPMENT = [
 
 async function loadUserInventory(db, userId) {
   const [rows] = await db.query(
-    'SELECT code, startdate, length, retail FROM user_inventory WHERE owner = ? AND expired = 0 AND deleted = 0',
+    // Several rows per code can exist (re-bought after expiry, GM/coupon grants): sorted so the furthest expiry wins.
+    'SELECT code, startdate, length, retail FROM user_inventory WHERE owner = ? AND expired = 0 AND deleted = 0 ORDER BY retail, startdate + length',
     [userId]
   );
   const inventory = new Map();

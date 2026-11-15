@@ -100,6 +100,23 @@ async function testShop() {
   assert.deepStrictEqual([ok[0], ok[6]], [1, 800]);
   assert.deepStrictEqual(queries[0][1], [200, u.id, 200]);
 
+  // Renewal: buying an owned item extends the existing row from the current expiry, no new row.
+  const before = u.inventory.get('GA01').expireDate;
+  queries.length = 0;
+  await buy(u, 'GA01', 0);
+  assert.strictEqual(u.money, 700);
+  assert.strictEqual(u.inventory.get('GA01').expireDate, before + 3 * 86400);
+  assert.ok(queries[1][0].startsWith('UPDATE user_inventory SET length = length + ?'), 'extends, does not insert');
+  assert.deepStrictEqual(queries[1][1], [3 * 86400, u.id, 'GA01']);
+  // A failed renewal puts the old expiry back; a retail item cannot be renewed.
+  commit = Promise.reject(new Error('db down')); commit.catch(() => {});
+  await buy(u, 'GA01', 0);
+  assert.deepStrictEqual([u.money, u.inventory.get('GA01').expireDate, u.inventory.get('GA01').busy], [700, before + 3 * 86400, undefined]);
+  commit = Promise.resolve();
+  u.inventory.get('GA01').retail = true;
+  await buy(u, 'GA01', 0);
+  assert.deepStrictEqual([u.socket.last(ITEMSHOP)[0], u.money], [97020, 700]);
+
   // Double buy: the second packet arrives while the first is still in its transaction.
   let release; commit = new Promise((r) => (release = r));
   const v = mkUser({ money: 1000 });
