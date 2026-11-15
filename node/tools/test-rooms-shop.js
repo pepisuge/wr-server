@@ -11,7 +11,7 @@ function mkUser(o = {}) {
   const socket = {
     out: [], raw: 0, ended: false, destroyed: false,
     sendPacket(id, fields) { this.out.push({ id, fields }); },
-    write() { this.raw++; },
+    write(buf) { this.raw++; this.lastBuf = buf; },
     end() { this.ended = true; },
     last(id) { return [...this.out].reverse().find((p) => p.id === id)?.fields; },
   };
@@ -178,6 +178,13 @@ function testTeamChat() {
   assert.deepStrictEqual(raw().map((n, i) => n - before[i]), [1, 1, 0, 1], 'team + spectators only');
   room.mode = 1; before = raw(); say();
   assert.deepStrictEqual(raw(), before, 'no team chat in FFA');
+
+  // Clan chat: the server stamps the sender's clan id as targetId, whatever the sender put there.
+  a.clanId = 14; b.clanId = 14;
+  handleChat(a.socket, { blocks: [10, 0, 'NULL', 'x>>hi'] });
+  const { xorBuffer, parsePacket } = require('../lib/packet');
+  const line = parsePacket(xorBuffer(b.socket.lastBuf, require('../lib/constants').XOR.external.send));
+  assert.deepStrictEqual([line.blocks[3], line.blocks[4]], ['10', '14'], 'clan line carries the clan id');
   console.log('OK: team chat');
 }
 

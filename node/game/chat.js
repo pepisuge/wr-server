@@ -121,6 +121,7 @@ function handleChat(socket, pkt, db) {
     }
     case TYPE.CLAN: {
       if (u.clanId <= 0) return;
+      fields[4] = u.clanId; // the client drops a clan line unless targetId is its own clan id (the real client sends it)
       const sockets = [...users.values()].filter((x) => x.clanId === u.clanId).map((x) => x.socket);
       broadcast(sockets, fields);
       break;
