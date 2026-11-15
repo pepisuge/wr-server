@@ -93,7 +93,10 @@ function handleChat(socket, pkt, db) {
       if (u.roomId === null) return socket.end();
       const room = getChannel(u.channel).rooms.get(u.roomId);
       if (!room) return;
-      if (u.isGm) fields[4] = GM_TARGET; // light blue for staff (outside a match; in-game lines use team colours)
+      // Light blue (outside a match; in-game lines use team colours) for staff, and for a supermaster room's master
+      // while waiting (Chat.cs).
+      const smMaster = room.supermaster && room.state === 1 && room.players.get(u.sessionId)?.slot === room.master;
+      if (u.isGm || smMaster) fields[4] = GM_TARGET;
       broadcast(roomSockets(room), fields);
       break;
     }

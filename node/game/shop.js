@@ -130,12 +130,9 @@ async function handleUseItem(socket, db, u, pkt) {
   return sendError(socket, ERROR.INVALID_ITEM);
 }
 
-// Ported from Itemshop.cs's Process(), validation order preserved exactly -
-// only the "already own a non-retail item" branch differs: the reference
-// renews it there (and does so by inserting a *second* user_inventory row
-// instead of updating the first, a real bug that lets DB and in-memory
-// expiry drift apart over repeated renewals) - simplified here to a flat
-// rejection until renewal is actually needed (see the plan).
+// Ported from Itemshop.cs's Process(), validation order preserved. Buying an owned (non-retail) item renews it: the
+// reference inserts a second user_inventory row and extends only memory, so the expiry could go back at the next login;
+// here the existing row's length grows, from the current expiry.
 function handleItemshop(db) {
   return (socket, pkt) => {
     const u = socket.user;
@@ -161,24 +158,37 @@ function handleItemshop(db) {
     if (!(price >= 0)) return socket.end(); // not sellable for that lease length
 
     if (u.money < price) return sendError(socket, ERROR.NOT_ENOUGH_DINAR);
-    if (ownsItem(u.inventory, itemCode)) return sendError(socket, ERROR.CANNOT_BE_BOUGHT);
+    const owned = ownsItem(u.inventory, itemCode) ? u.inventory.get(itemCode) : null;
+    // Retail items never expire; busy = a buy or renewal of this item is still being stored.
+    if (owned && (owned.retail || owned.busy)) return sendError(socket, ERROR.CANNOT_BE_BOUGHT);
 
     // Memory first, so a second buy packet arriving meanwhile already sees the new balance/item. The charge and the
     // item are one transaction, and the client hears "bought" only once it is stored; on failure memory is undone.
+    const lengthSeconds = 86400 * DAYS[lengthIdx];
     u.money -= price;
-    u.inventory.set(itemCode, { expireDate: Number.MAX_SAFE_INTEGER, retail: false }); // reserved; grantItem sets the real expiry
+    if (owned) Object.assign(owned, { expireDate: owned.expireDate + lengthSeconds, busy: true });
+    else u.inventory.set(itemCode, { expireDate: Number.MAX_SAFE_INTEGER, retail: false, busy: true }); // grantItem replaces it
     return db
       .transaction(async (conn) => {
         const [res] = await conn.query('UPDATE user_details SET money = money - ? WHERE id = ? AND money >= ?', [price, u.id, price]);
         if (res.affectedRows !== 1) throw new Error('balance in DB lower than in memory');
-        await grantItem(conn, u, itemCode, DAYS[lengthIdx]);
+        if (!owned) return grantItem(conn, u, itemCode, DAYS[lengthIdx]);
+        const [row] = await conn.query(
+          'UPDATE user_inventory SET length = length + ? WHERE owner = ? AND code = ? AND expired = 0 AND deleted = 0 ORDER BY startdate + length DESC LIMIT 1',
+          [lengthSeconds, u.id, itemCode]
+        );
+        if (row.affectedRows !== 1) throw new Error('owned item missing in DB');
       })
       .then(
-        () => sendSuccess(socket, u),
+        () => {
+          if (owned) delete owned.busy;
+          sendSuccess(socket, u);
+        },
         (err) => {
           console.error(`shop: purchase of ${itemCode} by ${u.id} not stored:`, err.message);
           u.money += price;
-          u.inventory.delete(itemCode);
+          if (owned) Object.assign(owned, { expireDate: owned.expireDate - lengthSeconds, busy: undefined });
+          else u.inventory.delete(itemCode);
           sendError(socket, ERROR.CANNOT_BE_BOUGHT);
         }
       );

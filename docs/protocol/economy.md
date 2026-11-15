@@ -23,6 +23,7 @@ Rates come from the `gameconfig` table (`expRate`, `dinarRate`, `levelup_base_re
 | `CC05` DoubleUp | +25% | +25% | Chapter-1 `Player.cs` |
 | `CC03` UP_EXP | +30% | | our own (unwired in both references) |
 | `CC04` UP_DINAR | | +30% | our own (unwired in both references) |
+| `CC02` SUPERMASTER | +5% for everyone in a room its owner created | +10% for that room's master, if they own `CC02` | Chapter-1 `Player.cs`; the room's supermaster flag (room list) drops when the master changes |
 
 The other extras need nothing from the server beyond the inventory list: client 22 (`FUN_004c2d60`) checks the owned codes `CF01` (stamina x1.2), `CF02`, `CJ01`/`CJ02` (extra magazines), `CG01`/`CG02` (scopes) and `CH01` (bandage) itself. `CF01` and `CJ01` verified live. `CI01` (RELOAD_UP) appears nowhere in the client: no effect, and `item_shop` already has it unbuyable.
 
@@ -58,11 +59,11 @@ client: id=30208 fields=[1110, DC01, 0, 0, 1]
 server: id=30208 blocks=[1, 1110, -1, 3, 1, DC01-1-0-26082810-0, 145100, F,F,F,F]
 ```
 
-Validation order: code/format, for sale, inventory space (max 32), premium, level, price exists for that duration, enough money, not already owned. Errors: `97020` not buyable or already owned, `97040` not enough money, `97060` premium/level requirement, `97070` inventory full.
+Validation order: code/format, for sale, inventory space (max 32), premium, level, price exists for that duration, enough money, not a retail item or one still being stored. Errors: `97020` not buyable, retail or a purchase already in progress, `97040` not enough money, `97060` premium/level requirement, `97070` inventory full.
 
 **The client draws the shop from its own data files and sends the price index it chose**; the server checks it against `item_shop.cost`. An unknown code, a duration index out of range or a price mismatch **closes the connection** (treated as tampering). Keep the DB prices identical to what the client shows. Index 4 (permanent) is accepted.
 
-Owning a still-valid item blocks a new purchase (the reference inserts a duplicate row instead; renewal is not implemented).
+**Renewal**: buying a still-valid item you own extends it from its current expiry: the existing `user_inventory` row's `length` grows (the reference inserted a second row and extended only memory, so the expiry could go back at the next login). If several rows for one code exist (re-bought after expiry, GM grants), the one with the furthest expiry wins at login.
 
 ### Equipment (`0x7512` = 29970)
 

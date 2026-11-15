@@ -100,6 +100,23 @@ async function testShop() {
   assert.deepStrictEqual([ok[0], ok[6]], [1, 800]);
   assert.deepStrictEqual(queries[0][1], [200, u.id, 200]);
 
+  // Renewal: buying an owned item extends the existing row from the current expiry, no new row.
+  const before = u.inventory.get('GA01').expireDate;
+  queries.length = 0;
+  await buy(u, 'GA01', 0);
+  assert.strictEqual(u.money, 700);
+  assert.strictEqual(u.inventory.get('GA01').expireDate, before + 3 * 86400);
+  assert.ok(queries[1][0].startsWith('UPDATE user_inventory SET length = length + ?'), 'extends, does not insert');
+  assert.deepStrictEqual(queries[1][1], [3 * 86400, u.id, 'GA01']);
+  // A failed renewal puts the old expiry back; a retail item cannot be renewed.
+  commit = Promise.reject(new Error('db down')); commit.catch(() => {});
+  await buy(u, 'GA01', 0);
+  assert.deepStrictEqual([u.money, u.inventory.get('GA01').expireDate, u.inventory.get('GA01').busy], [700, before + 3 * 86400, undefined]);
+  commit = Promise.resolve();
+  u.inventory.get('GA01').retail = true;
+  await buy(u, 'GA01', 0);
+  assert.deepStrictEqual([u.socket.last(ITEMSHOP)[0], u.money], [97020, 700]);
+
   // Double buy: the second packet arrives while the first is still in its transaction.
   let release; commit = new Promise((r) => (release = r));
   const v = mkUser({ money: 1000 });
@@ -199,6 +216,11 @@ function testBoosters() {
   inventory.set('CE01', { expireDate: now - 1, retail: false });
   const r = applyMatchEnd(noDb, { xp: 0, money: 0, premium: 0, inventory }, 10);
   assert.deepStrictEqual([r.xpEarned, r.moneyEarned], [82, 88]);
+  // Supermaster room: +5% XP for everyone, +10% dinar only for a master who owns CC02.
+  const room = { supermaster: true, master: 0, players: new Map([[1, { slot: 0 }], [2, { slot: 1 }]]) };
+  const sm = (sessionId, codes) => applyMatchEnd(noDb, { sessionId, xp: 0, money: 0, premium: 0, inventory: own(codes) }, 100, room);
+  assert.deepStrictEqual([sm(1, ['CC02']).xpEarned, sm(1, ['CC02']).moneyEarned], [440, 380]);
+  assert.deepStrictEqual([sm(2, ['CC02']).xpEarned, sm(2, ['CC02']).moneyEarned], [440, 350]);
   console.log('OK: boosters');
 }
 
