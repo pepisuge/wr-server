@@ -4,12 +4,14 @@ const { getChannel, lobbyUsersIn, users, roomSockets } = require('./state');
 const { handleGmCommand } = require('./gm');
 
 const CHAT = 0x7400;
+const FFA_MODE = 1;
 
 const TYPE = {
   NOTICE1: 1,
   NOTICE2: 2,
   LOBBY_TO_CHANNEL: 3,
   ROOM_TO_ALL: 4,
+  ROOM_TO_TEAM: 5,
   WHISPER: 6,
   LOBBY_TO_ALL: 8,
   CLAN: 10,
@@ -39,9 +41,8 @@ function extractText(rawMessage) {
   return rawMessage.slice(idx + marker.length).split('\x1D').join(' ');
 }
 
-// Ported from Game/Handlers/Chat.cs. Skips Room_ToTeam (no per-team chat
-// scoping yet) and the /cris command branch (Cristina subsystem is out of
-// scope) - unrecognized/out-of-scope types are silently ignored.
+// Ported from Game/Handlers/Chat.cs. Skips the /cris command branch (Cristina subsystem is out of scope);
+// unrecognized types are silently ignored.
 function handleChat(socket, pkt, db) {
   const u = socket.user;
   if (!u) return;
@@ -94,6 +95,18 @@ function handleChat(socket, pkt, db) {
       if (!room) return;
       if (u.isGm) fields[4] = GM_TARGET; // light blue for staff (outside a match; in-game lines use team colours)
       broadcast(roomSockets(room), fields);
+      break;
+    }
+    case TYPE.ROOM_TO_TEAM: {
+      // Only the sender's team hears it. FFA has no teams (Chat.cs disconnects there; ignoring is enough).
+      if (u.roomId === null) return socket.end();
+      const room = getChannel(u.channel).rooms.get(u.roomId);
+      const me = room?.players.get(u.sessionId);
+      if (!me || room.mode === FFA_MODE) return;
+      if (u.isGm) fields[4] = GM_TARGET;
+      // Spectators see both teams' lines, as in ToXiiC's Chat.cs.
+      const sids = [...room.players.values()].filter((p) => p.team === me.team).map((p) => p.sessionId);
+      broadcast([...sids, ...(room.spectators?.keys() ?? [])].map((sid) => users.get(sid)?.socket).filter(Boolean), fields);
       break;
     }
     case TYPE.WHISPER: {

@@ -38,6 +38,7 @@ The message is `"<nick>>>\x1D<text>"` with spaces already escaped.
 | 2 | Notice2 | **notice popup**; `/notice` uses it for players in the lobby |
 | 3 | LobbyToChannel | chat line |
 | 4 | Room_ToAll | chat line; colour by `targetId` (below) |
+| 5 | Room_ToTeam | chat line, sent only to the sender's team and to spectators; ignored in FFA (needs live test) |
 | 6 | Whisper | private chat line |
 | 8 | LobbyToAll | chat line |
 | 10 | Clan | clan chat line |
