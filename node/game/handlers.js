@@ -7,7 +7,7 @@ const { handleEquipment, EQUIPMENT } = require('./equipment');
 const { loadUserDetails, effectivePremium, levelForXp } = require('./progression');
 const { CLAN_SYSTEM, CLAN_RANKING, handleClanSystem, handleClanRanking, clanInfo } = require('./clan');
 const { handleUserList, announceJoin, announceLeave, USER_LIST } = require('./userlist');
-const { handleItemshop, ITEMSHOP } = require('./shop');
+const { handleItemshop, handleCashItem, ITEMSHOP, CASH_ITEM } = require('./shop');
 const { loadUserInventory, loadUserEquipment, buildItemlist, buildSlotState } = require('./inventory');
 const { loadRedeemedCoupons, handleCoupon, COUPON } = require('./coupon');
 const { handlePingReply, PING } = require('./ping');
@@ -226,6 +226,7 @@ function createHandlers(db) {
     [CLAN_SYSTEM]: handleClanSystem(db),
     [CLAN_RANKING]: handleClanRanking,
     [ITEMSHOP]: handleItemshop(db),
+    [CASH_ITEM]: handleCashItem(db),
     [COUPON]: handleCoupon(db),
     [PING]: handlePingReply,
   };

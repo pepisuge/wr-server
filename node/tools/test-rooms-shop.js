@@ -4,7 +4,7 @@ const assert = require('assert');
 const { users } = require('../game/state');
 const { loadItems } = require('../game/items');
 const rooms = require('../game/rooms');
-const { handleItemshop, ITEMSHOP } = require('../game/shop');
+const { handleItemshop, handleCashItem, setAuthDb, ITEMSHOP, CASH_ITEM } = require('../game/shop');
 
 let nextSession = 1;
 function mkUser(o = {}) {
@@ -148,6 +148,34 @@ async function testShop() {
   console.log('OK: shop');
 }
 
+async function testCashItemUse() {
+  // Client 22 uses items through 0x7800 [1111, ?, ?, code, param] (live capture).
+  let taken = false;
+  setAuthDb({ query: (sql) => Promise.resolve([sql.startsWith('SELECT') && taken ? [{ id: 9 }] : []]) });
+  const own = (codes) => new Map(codes.map((c) => [c, { expireDate: Number.MAX_SAFE_INTEGER, retail: false }]));
+  const use = (u, code, param = '') => handleCashItem(noDb)(u.socket, { blocks: [1111, 4, 6, code, param] });
+  const u = mkUser({ inventory: own(['CB01', 'CB03']), kills: 5, deaths: 7 });
+
+  taken = true;
+  await use(u, 'CB01', 'newnick');
+  assert.ok(u.inventory.has('CB01') && u.displayname !== 'newnick', 'taken name: nothing spent');
+  taken = false;
+  await use(u, 'CB01', 'no!');
+  assert.ok(u.inventory.has('CB01'), 'invalid name: nothing spent');
+  await Promise.all([use(u, 'CB01', 'newnick'), use(u, 'CB01', 'other')]);
+  assert.strictEqual(u.displayname, 'newnick', 'one item, one rename');
+  assert.ok(!u.inventory.has('CB01'));
+  const r = u.socket.last(CASH_ITEM);
+  assert.deepStrictEqual([r[0], r[1], r[2], r[5]], [1111, 1, 'CB01', 'newnick']);
+
+  await use(u, 'CB03');
+  assert.deepStrictEqual([u.kills, u.deaths, u.inventory.has('CB03')], [0, 0, false]);
+  const sent = u.socket.out.length;
+  await use(u, 'CB03');
+  assert.strictEqual(u.socket.out.length, sent, 'not owned any more: ignored');
+  console.log('OK: cash item use');
+}
+
 function testVoteKick() {
   const { handleVoteKick } = require('../game/votekick');
   const { getChannel } = require('../game/state');
@@ -228,4 +256,4 @@ testRooms();
 testBoosters();
 testVoteKick();
 testTeamChat();
-testShop().then(() => process.exit(0), (e) => { console.error(e); process.exit(1); });
+testShop().then(testCashItemUse).then(() => process.exit(0), (e) => { console.error(e); process.exit(1); });

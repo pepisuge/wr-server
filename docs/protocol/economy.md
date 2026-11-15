@@ -65,6 +65,15 @@ Validation order: code/format, for sale, inventory space (max 32), premium, leve
 
 **Renewal**: buying a still-valid item you own extends it from its current expiry: the existing `user_inventory` row's `length` grows (the reference inserted a second row and extended only memory, so the expiry could go back at the next login). If several rows for one code exist (re-bought after expiry, GM grants), the one with the furthest expiry wins at login.
 
+### Using an item (`0x7800` = 30720)
+
+```
+client: id=30720 blocks=[1111, 4, 6, CB01, provaadmin]
+server: id=30720 fields=[1111, 1, CB01, <itemlist>, <slotState>, provaadmin]
+```
+
+Not `ITEMSHOP`: client 22 sends item use (`1111`) on `0x7800` (`FUN_00468810`), code at index 3 and the parameter at 4. Ported from ToXiiC `CashItemBuy.cs` (`OnItemUse`, `SP_CashItemUse`): `CB01` renames the account (`users.displayname`, 3-16 letters/digits, unique), `CB03` resets kills/deaths (reply adds `0, 0, money`); the item is consumed. A refused rename gets a whisper and keeps the item. `CB01`/`CB03` are bought for dinar like any item (`sql/13`). (needs live test)
+
 ### Equipment (`0x7512` = 29970)
 
 The code must exist and be an active weapon, fit that slot for that class (`item_equipment`), and be owned (or a base weapon). The result is saved to `user_equipment`. Violations close the connection. GMs may bypass only the slot/class check, not ownership. `97090` = already equipped.
