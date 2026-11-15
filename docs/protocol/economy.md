@@ -23,6 +23,7 @@ Rates come from the `gameconfig` table (`expRate`, `dinarRate`, `levelup_base_re
 | `CC05` DoubleUp | +25% | +25% | Chapter-1 `Player.cs` |
 | `CC03` UP_EXP | +30% | | our own (unwired in both references) |
 | `CC04` UP_DINAR | | +30% | our own (unwired in both references) |
+| `CC02` SUPERMASTER | +5% for everyone in a room its owner created | +10% for that room's master, if they own `CC02` | Chapter-1 `Player.cs`; the room's supermaster flag (room list) drops when the master changes |
 
 The other extras need nothing from the server beyond the inventory list: client 22 (`FUN_004c2d60`) checks the owned codes `CF01` (stamina x1.2), `CF02`, `CJ01`/`CJ02` (extra magazines), `CG01`/`CG02` (scopes) and `CH01` (bandage) itself. `CF01` and `CJ01` verified live. `CI01` (RELOAD_UP) appears nowhere in the client: no effect, and `item_shop` already has it unbuyable.
 

@@ -4,6 +4,7 @@ const { getChannel, lobbyUsersIn, nextFreeRoomId, users, roomSockets } = require
 const { stopRoundTimer, endRound } = require('./roundtimer');
 const { levelForXp, suitableLevel, applyMatchEnd } = require('./progression');
 const { clanInfo } = require('./clan');
+const { ownsItem } = require('./inventory');
 
 const ROOM_CREATION = 0x7300;
 const ROOM_JOIN = 0x7310;
@@ -138,8 +139,8 @@ function sendRoomDeleteToLobby(channel, roomId) {
   if (sockets.length) broadcastPacket(sockets, XOR.external, ROOM_LIST_UPDATE, [roomId, 2]); // RoomUpdateType: 0=Create,1=Update,2=Delete
 }
 
-// Ported from Game/Handlers/RoomCreation.cs. Skips level/clan/inventory
-// gating (we don't track XP or items yet) and vote-kick's CC02 item check.
+// Ported from Game/Handlers/RoomCreation.cs. Skips vote-kick's CC02 check (turning votekick off needs CC02 there):
+// the real client sent 0 at blocks[10] without CC02, so that index is unconfirmed.
 function handleRoomCreation(socket, pkt) {
   const u = socket.user;
   if (!u || u.roomId !== null) {
@@ -192,7 +193,7 @@ function handleRoomCreation(socket, pkt) {
     pingLimit: 2,
     userLimit: false, // host-toggled room lock (GameSubs.Userlimit) - separate from maxPlayers
     isClanWar: -1,
-    supermaster: false,
+    supermaster: ownsItem(u.inventory, 'CC02'), // Room.cs / CreateRoom.cs: the creator owns SUPERMASTER
     master: 0, // slot index, not a sessionId
     players: new Map([
       [
@@ -512,7 +513,7 @@ function removeFromRoom(db, u) {
 
   const player = room.players.get(u.sessionId);
   if (room.state === 2 && player) {
-    const { levelUp } = applyMatchEnd(db, u, player.kills);
+    const { levelUp } = applyMatchEnd(db, u, player.kills, room);
     if (levelUp) u.socket.sendPacket(LEVEL_UP, [player.slot, 0, levelUp.newLevel, u.xp, levelUp.bonusMoney]);
   }
 

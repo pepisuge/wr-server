@@ -216,6 +216,11 @@ function testBoosters() {
   inventory.set('CE01', { expireDate: now - 1, retail: false });
   const r = applyMatchEnd(noDb, { xp: 0, money: 0, premium: 0, inventory }, 10);
   assert.deepStrictEqual([r.xpEarned, r.moneyEarned], [82, 88]);
+  // Supermaster room: +5% XP for everyone, +10% dinar only for a master who owns CC02.
+  const room = { supermaster: true, master: 0, players: new Map([[1, { slot: 0 }], [2, { slot: 1 }]]) };
+  const sm = (sessionId, codes) => applyMatchEnd(noDb, { sessionId, xp: 0, money: 0, premium: 0, inventory: own(codes) }, 100, room);
+  assert.deepStrictEqual([sm(1, ['CC02']).xpEarned, sm(1, ['CC02']).moneyEarned], [440, 380]);
+  assert.deepStrictEqual([sm(2, ['CC02']).xpEarned, sm(2, ['CC02']).moneyEarned], [440, 350]);
   console.log('OK: boosters');
 }
 

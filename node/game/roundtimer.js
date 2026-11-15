@@ -153,7 +153,7 @@ function endRound(room, db) {
   const fields = [1, ...roundFields, teamKills[0], teamDeaths[0], teamKills[1], teamDeaths[1], 0, 0, players.length];
   for (const p of players) {
     const u = users.get(p.sessionId);
-    const { xpEarned, moneyEarned } = u ? applyMatchEnd(db, u, p.kills) : { xpEarned: 0, moneyEarned: 0 };
+    const { xpEarned, moneyEarned } = u ? applyMatchEnd(db, u, p.kills, room) : { xpEarned: 0, moneyEarned: 0 };
     fields.push(p.slot, p.kills, p.deaths, 0, p.kills, moneyEarned, xpEarned, u ? u.xp : 0);
   }
   fields.push(room.master);

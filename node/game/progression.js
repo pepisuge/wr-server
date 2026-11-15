@@ -141,10 +141,12 @@ function boosterBonus(inventory) {
 // (see gamesubs.js's PlayerDamage). Persists xp+money to DB (the reference
 // only persists money from this path - persisting xp too is a deliberate
 // fix, otherwise levels would never survive a restart).
-function applyMatchEnd(db, user, points = 0) {
+function applyMatchEnd(db, user, points = 0, room = null) {
   const [xpBonus, dinarBonus] = boosterBonus(user.inventory);
-  const expRate = 1 + premiumXpBonus(user.premium) + xpBonus;
-  const dinarRate = 1 + dinarBonus;
+  // Supermaster room (Player.cs): +5% XP for everyone, +10% dinar for its master if they own CC02.
+  const sm = room?.supermaster ? [0.05, room.players.get(user.sessionId)?.slot === room.master && ownsItem(user.inventory, 'CC02') ? 0.1 : 0] : [0, 0];
+  const expRate = 1 + premiumXpBonus(user.premium) + xpBonus + sm[0];
+  const dinarRate = 1 + dinarBonus + sm[1];
 
   const xpEarned = Math.ceil((20 + points * 4 * expRate) * GameConfig.expRate);
   const moneyEarned = Math.ceil((50 + points * 3 * dinarRate) * GameConfig.dinarRate);

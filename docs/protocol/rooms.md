@@ -44,7 +44,7 @@ The message is `"<nick>>>\x1D<text>"` with spaces already escaped.
 | 10 | Clan | light green chat line, shown only when `targetId` is the reader's own clan id (the real client sends it; the server stamps the sender's clan id) |
 
 - **Client 22 handler** (decompiled `0x7400`, `FUN_005edcd0`): it prints the **message field as-is**, so the `Nick>> ` prefix is whatever the sender wrote. The server therefore rebuilds it from the sender's real nickname before forwarding.
-- Room line colour (type 4, outside a match) by `targetId`: `999` yellow (system), `997`/`998` light blue (used for GM lines), anything else white. During a match lines use team colours.
+- Room line colour (type 4, outside a match) by `targetId`: `999` yellow (system), `997`/`998` light blue (used for GM lines and, while waiting, for a supermaster room's master as in Chat.cs), anything else white. During a match lines use team colours.
 - The client reads at most 512 bytes per field. Its error-reply path (first field not `0`/`1`, e.g. `95040` + name) copies that string into a 128-byte buffer: never send long strings in chat error replies.
 - Server-side limits: text after `>>` at most 60 characters, target name at most 16, 5 messages per 5 s per player (a warning whisper instead of the 6th); a message without the `>>` marker is dropped.
 - System messages use type 4 with `targetId=999` and the `System>> ` prefix: yellow text, no popup.
