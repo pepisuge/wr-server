@@ -7,8 +7,8 @@ const { ownsItem, buildItemlist, buildSlotState, MAX_ITEMS } = require('./invent
 
 const ITEMSHOP = 0x7600;
 const BUY_ITEM = 0x456; // Enums.ItemAction.BuyItem
-// Using an item goes through the cash-item opcode, not ITEMSHOP: client 22 sends
-// 0x7800 [1111, ?, ?, code, param] (live capture; FUN_00468810 via FUN_005484b0). Ported from ToXiiC-Core's
+// Client 22 uses items two ways (live captures): CB03 on ITEMSHOP [1111, code, ?, ?, -1], CB01 (asks a name first) on
+// 0x7800 [1111, ?, ?, code, nickname] (FUN_00468810 via FUN_005484b0). Ported from ToXiiC-Core's
 // CashItemBuy.cs OnItemUse: only CB01 (rename) and CB03 (kill/death reset); its other cases (CZ73 ham radio,
 // random/gift boxes) need a package-reward system this schema has no tables for.
 const CASH_ITEM = 0x7800;
@@ -38,10 +38,12 @@ function sendError(socket, code) {
   socket.sendPacket(ITEMSHOP, [code]);
 }
 
-function sendSuccess(socket, u) {
+// Also the reply to an item use on ITEMSHOP (action 1111): client 22's handler (FUN_005f5da0/FUN_005f5f10) then zeroes
+// its own kill/death counters and shows "Item use successful.".
+function sendSuccess(socket, u, action = BUY_ITEM) {
   socket.sendPacket(ITEMSHOP, [
     1,
-    BUY_ITEM,
+    action,
     -1,
     3,
     u.inventory.size,
@@ -106,18 +108,22 @@ const validNickname = (name) => NICKNAME_RE.test(name) && !RESERVED_RE.test(name
 // (forbidden word, Korean only), 74030 = m134_6 (empty). Without a reply the inventory window stays waiting.
 const USE_ERROR = { NAME_TAKEN: 74070, NAME_FORMAT: 74100 };
 
+function resetKillDeath(db, u) {
+  u.kills = 0;
+  u.deaths = 0;
+  db.query('UPDATE user_details SET kills = 0, deaths = 0 WHERE id = ?', [u.id]).catch((err) =>
+    console.error('shop: failed to persist kill/death reset:', err.message)
+  );
+  removeItem(db, u, 'CB03');
+}
+
 async function handleUseItem(socket, db, u, pkt) {
   const itemCode = String(pkt.blocks[3] || '').toUpperCase();
   if (!ownsItem(u.inventory, itemCode)) return;
   const refuse = (code) => socket.sendPacket(CASH_ITEM, [USE_ITEM, code, itemCode, buildItemlist(u.inventory)]);
 
   if (itemCode === 'CB03') {
-    u.kills = 0;
-    u.deaths = 0;
-    db.query('UPDATE user_details SET kills = 0, deaths = 0 WHERE id = ?', [u.id]).catch((err) =>
-      console.error('shop: failed to persist kill/death reset:', err.message)
-    );
-    removeItem(db, u, itemCode);
+    resetKillDeath(db, u);
     return socket.sendPacket(CASH_ITEM, [USE_ITEM, 1, itemCode, buildItemlist(u.inventory), buildSlotState(u, u.inventory), 0, 0, u.money]);
   }
 
@@ -151,6 +157,12 @@ function handleItemshop(db) {
     if (!u) return;
 
     const actionType = Number(pkt.blocks[0]);
+    if (actionType === USE_ITEM) {
+      const code = String(pkt.blocks[1] || '').toUpperCase();
+      if (code !== 'CB03' || !ownsItem(u.inventory, code)) return sendError(socket, ERROR.INVALID_ITEM); // "item is no longer valid"
+      resetKillDeath(db, u);
+      return sendSuccess(socket, u, USE_ITEM);
+    }
     if (actionType !== BUY_ITEM) return sendError(socket, ERROR.INVALID_ITEM); // anything else - likely cheating, matches the reference
 
     const itemCode = (pkt.blocks[1] || '').toUpperCase();
