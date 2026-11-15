@@ -655,12 +655,12 @@ function bleed(room, db) {
     p.bleedTicks = (p.bleedTicks || 0) + 1;
     if (p.bleedTicks < BLEED_EVERY) continue;
     p.bleedTicks = 0;
+    changed = true; // sent even to a bandaged player: the client then shows m986_6 "You are using compressed bandage."
     const u = users.get(p.sessionId);
     if (!u || ownsItem(u.inventory, 'CH01')) continue;
     const dmg = room.channel === 2 ? 25 : 5;
     if (p.health > dmg) {
       p.health -= dmg;
-      changed = true;
       continue;
     }
     suicideDeath(p, u, db);
