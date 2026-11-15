@@ -10,7 +10,7 @@ Two processes: `auth-server.js` (login / server list) and `game-server.js` (room
 ## Project status
 
 > [!IMPORTANT]
-> Estimated completion per area, measured against the real client (**Client 22**). Last update: **2026-11-15**.
+> Estimated completion per area, measured against the real client (**Client 22**). Last update: **2026-11-16**.
 > "Done" means tested live with the real client, not only ported. Gaps link to their issue.
 
 | Area | Progress | Works | Missing |
@@ -19,19 +19,19 @@ Two processes: `auth-server.js` (login / server list) and `game-server.js` (room
 | **Game server core** | `█████████░` 90% | authorization, channels, ping/liveness, UDP relay with endpoint checks, graceful shutdown | supervisor ([#22](https://github.com/pepisuge/wr-server/issues/22)) |
 | **Lobby system** | `████████▌░` 85% | channel select, room list and paging, user list, invites, quick join | |
 | **Room system** | `██████████` 100% | create/join/leave, teams and slots, master handover (also by GM), kick, votekick, autostart, settings (map, mode, rounds, ping), GM spectator, GM-unlocked start, own clan emblem | |
-| **CQC** (infantry) | `████████░░` 80% | Explosive, Free-for-All, Team Deathmatch, per-weapon damage, heal, mines, medic/ammo boxes, artillery, scoreboard, XP/dinar | damage falloff ([#9](https://github.com/pepisuge/wr-server/issues/9)) |
+| **CQC** (infantry) | `████████▌░` 85% | Explosive, Free-for-All, Team Deathmatch, per-weapon damage, heal, adrenaline, stamina, mines and flash mines (enemies only), medic/ammo boxes, bleeding under 300 HP and bandages, artillery, scoreboard, XP/dinar | damage falloff ([#9](https://github.com/pepisuge/wr-server/issues/9)) |
 | **Urban Ops** | `█████░░░░░` 50% | everything in CQC on Urban maps | vehicles ([#5](https://github.com/pepisuge/wr-server/issues/5)), Conquest ([#4](https://github.com/pepisuge/wr-server/issues/4)) |
 | **Battle Group** | `███▌░░░░░░` 35% | infantry modes on Battle Group maps | vehicles ([#5](https://github.com/pepisuge/wr-server/issues/5)), Conquest ([#4](https://github.com/pepisuge/wr-server/issues/4)) |
 | **Chat system** | `██████████` 100% | lobby, room, team, whisper, clan chat, mute, notice popup, English system messages, impersonation/length/rate limits | |
 | **Clan system** | `████████▌░` 85% | create, join/leave, ranks (master-only), members, clan chat, emblems in lobby and rooms (gallery or upload), clan wars declared from the site with results, points and ranking; in game through the CLAN button (client mod) | clan war accept/decline ([#42](https://github.com/pepisuge/wr-server/issues/42)), native client dialogs ([#12](https://github.com/pepisuge/wr-server/issues/12)) |
-| **Shop & inventory** | `███████▌░░` 75% | buy (atomic), equipment and loadouts, coupons, rename and K/D reset items | renewal ([#8](https://github.com/pepisuge/wr-server/issues/8)), item effects ([#7](https://github.com/pepisuge/wr-server/issues/7)) |
-| **Progression** | `████████░░` 80% | XP, levels, level-up rewards, premium, boosters | |
+| **Shop & inventory** | `█████████░` 90% | buy (atomic, prices equal the client), renewal, equipment and loadouts, coupons, item use (nickname change, K/D reset), PX items (stamina, scopes, extra clips, bandage, boosters, supermaster) | random/gift boxes and packages (no client data) |
+| **Progression** | `█████████░` 90% | XP, levels, level-up rewards, premium, all XP/dinar boosters, supermaster bonus | |
 | **Anti-cheat (server side)** | `████████▌░` 85% | loadout, hit rate, knife range, attacker slot, connection/packet limits; speedhack (client clock and speed), teleport, superjump, no fall damage, OPK, hits ignored after a teleport until respawn; strikes, auto-kick, GM alerts | ammo, per-weapon fire rate, aim statistics, vehicles ([#41](https://github.com/pepisuge/wr-server/issues/41)); wallhack needs map geometry |
 | **GM tools** | `████████▌░` 85% | moderation (kick, mute, ban, temporary ban, warn), economy and items, room control (take/set master, unlock start, close, end, extend), info, anticheat strikes | |
 | **Website** | `███████░░░` 70% | registration, login, sign-on from the game, clan management, emblem gallery and upload, clan war declaration, clan ranking | referral ([#34](https://github.com/pepisuge/wr-server/issues/34)), HTTPS setup, final design |
-| **Client mod** (client 22) | `████████░░` 80% | CLAN button with the site in a game-style window, sign-on, clan emblems from the server (live refresh), installer/uninstaller with checked patches | test on another PC and first release ([#43](https://github.com/pepisuge/wr-server/issues/43)) |
+| **Client mod** (client 22) | `████████░░` 80% | CLAN button with the site in a game-style window, sign-on, clan emblems from the server (live refresh), installer/uninstaller with checked patches | missing English texts (shop, item use, stamina) and first release ([#43](https://github.com/pepisuge/wr-server/issues/43)) |
 
-**Overall: ~78%.** Open work is tracked in the [issues](https://github.com/pepisuge/wr-server/issues); protocol findings go to [`docs/protocol`](docs/protocol/index.md).
+**Overall: ~80%.** Open work is tracked in the [issues](https://github.com/pepisuge/wr-server/issues); protocol findings go to [`docs/protocol`](docs/protocol/index.md).
 
 ## Quick start
 ```bash
