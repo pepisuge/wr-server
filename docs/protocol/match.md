@@ -65,7 +65,13 @@ Top-level. The client repeats `id=30032 blocks=[]` while Tab is held. The reply 
 
 ## Autostart
 
-The toggle (GameSub 62) is ported. Neither reference ever reads the flag to start a match. The native countdown `GameCountDown` (30001) works (the client even prints "Starting the game 0!"), but no tested packet completes the transition; at zero the master is asked to press Start.
+The toggle (GameSub 62) is ported; neither reference ever reads the flag. Once everyone is ready (same checks as Start) the server sends `GameCountDown` (30001) `[seconds]` once per second from 20. The client handler (`FUN_005f2790`) only prints text ("Game starts in 20 seconds", a reminder every 5 s, "Starting the game N !"): it never starts anything itself. At 0 the server starts the match and broadcasts the same reply a real Start gets:
+
+```
+OUT(broadcast) id=30000 fields=[1, master slot, room id, 1, 4, 1, 0, map, 0, 0, 0, 0, 0, 0, 0]
+```
+
+The header type (4th field) must be **1** (room): the client routes type 2 to the in-match handler, and earlier attempts that sent type 2 left the room "Playing" with no client in a match. Un-readying, unbalancing the teams or switching autostart off cancels the countdown.
 
 ## Votekick
 

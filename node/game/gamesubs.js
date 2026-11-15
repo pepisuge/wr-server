@@ -189,85 +189,32 @@ function handleStart(room, player, payload, u, db) {
   return { newType: SUB.START_REPLY, payload: out, updateLobby: true };
 }
 
-// New work, not a port: neither C# reference has any logic that reads
-// AutoStart/autostart to actually trigger a match (write-only in both, same
-// as EnableVoteKick). Domain knowledge from live testing filled part of the
-// gap the references don't cover: the real feature shows a countdown in the
-// room chat once conditions are met. AUTOSTART_COUNTDOWN_SECONDS is a
-// best-guess (user's memory placed it "between 18 and 20s", not from either
-// reference or a packet capture) - adjust once seen on the wire.
-//
-// Three separate live tests of "fire a server-pushed START_REPLY once
-// conditions are met" all showed the same result: the server moved to a
-// real Playing state (map, tickets, GameTick ticking for 80-130+ seconds)
-// while the client showed zero reaction on any screen - not instantly, not
-// after a real chat countdown, not even with the payload padded to match a
-// real client's own 10-field GamePacket length (ruling out "packet just too
-// short to parse" as the cause).
-//
-// What did change something: GAME_COUNTDOWN (0x7531) - dead code in the
-// reference (Packets/CountDown.cs ignores its own `seconds` parameter, no
-// caller anywhere), tried anyway as an experiment - turned out to render a
-// real native countdown in the client's chat UI, confirmed live. Still, by
-// itself, reaching 0 didn't cause the client to send its own Start. Fourth
-// attempt (see tryAutoStart below): send the real START_REPLY together with
-// GAME_COUNTDOWN's final 0 tick, a combination not tried before - if this
-// still doesn't work, the honest conclusion is that a true zero-click start
-// isn't achievable with what's known about this client's protocol, and the
-// countdown should go back to ending in a "press Start" nudge instead of
-// risking another desynced Playing state.
+// Not in either C# reference (both only store the flag). The client's GameCountDown handler (FUN_005f2790) only prints:
+// "Game starts in 20 seconds" at 20, a reminder every 5 s, "Starting the game N !" each tick; it never starts anything.
+// The server starts the match at 0 with the same START_REPLY a real Start gets. Its header type must be 1 (room):
+// the client routes type 2 to the in-match handler, which is why earlier attempts with type 2 left a "ghost" match.
 const AUTOSTART_COUNTDOWN_SECONDS = 20;
 
-// Re-checks canStart() every tick so a player un-readying or unbalancing the
-// teams mid-countdown cancels it instead of starting a match nobody agreed
-// to anymore. Self-cleans if the room empties out too (canStart requires 2+
-// players), no separate teardown wired to room deletion needed.
-function tryAutoStart(room) {
+// Re-checks canStart() every tick: un-readying, unbalancing the teams or the room emptying cancels the countdown.
+function tryAutoStart(room, db) {
   if (room.autoStartCountdown) return; // already counting down
   if (!room.autoStart || room.state !== 1 || !canStart(room)) return;
 
-  // Broadcasts GAME_COUNTDOWN alongside the chat line each tick - see the
-  // opcode's own comment above for why (unproven experiment, not a port).
-  const sendCountdownPacket = (seconds) => {
-    const sockets = roomSockets(room);
-    broadcastPacket(sockets, XOR.external, GAME_COUNTDOWN, [seconds]);
-  };
-
+  const countdown = (seconds) => broadcastPacket(roomSockets(room), XOR.external, GAME_COUNTDOWN, [seconds]);
   let remaining = AUTOSTART_COUNTDOWN_SECONDS;
-  broadcastSystemMessage(room, `Avvio automatico tra ${remaining} secondi...`);
-  sendCountdownPacket(remaining);
+  countdown(remaining);
   room.autoStartCountdown = setInterval(() => {
-    if (!room.autoStart || room.state !== 1 || !canStart(room)) {
-      clearInterval(room.autoStartCountdown);
-      room.autoStartCountdown = null;
-      broadcastSystemMessage(room, 'Avvio automatico annullato.');
-      sendCountdownPacket(0);
-      return;
-    }
-    remaining--;
-    if (remaining <= 0) {
-      clearInterval(room.autoStartCountdown);
-      room.autoStartCountdown = null;
-      // Fourth attempt (send the real START_REPLY together with
-      // GAME_COUNTDOWN's final 0 tick) also failed live: the client's native
-      // countdown UI genuinely reacts now - it shows its own hardcoded
-      // string "Starting the game 0!" at zero, proving it's watching this
-      // opcode and expects a match to begin - but the match still didn't
-      // start. Stopping here: four different combinations tried (instant,
-      // after a chat countdown, with a correctly-padded payload, paired with
-      // the native GAME_COUNTDOWN reaching 0) all end the same way, and
-      // guessing further risks the same "ghost match" desync each earlier
-      // attempt produced. beginMatch/START_REPLY is not fired automatically
-      // - only a real click on Start (handleStart above) is confirmed to
-      // work. GAME_COUNTDOWN is kept for the real, confirmed-working native
-      // countdown UI; what completes the transition at 0, if anything short
-      // of a real click can, is unknown.
-      sendCountdownPacket(0);
-      broadcastSystemMessage(room, "Time's up! The master must press Start to begin.");
-      return;
-    }
-    broadcastSystemMessage(room, String(remaining));
-    sendCountdownPacket(remaining);
+    const ok = room.autoStart && room.state === 1 && canStart(room);
+    if (ok && --remaining > 0) return countdown(remaining);
+    clearInterval(room.autoStartCountdown);
+    room.autoStartCountdown = null;
+    if (room.state !== 1) return; // started by hand meanwhile
+    countdown(0);
+    if (!ok) return broadcastSystemMessage(room, 'Auto start cancelled.');
+    beginMatch(room, db);
+    // Same fields as the reply to a real Start (captured): [1, master, room, type 1, START_REPLY, 1, 0, map, 0 x 7].
+    broadcastPacket(roomSockets(room), XOR.external, GAME_PACKET, [1, room.master, room.id, 1, SUB.START_REPLY, 1, 0, room.map, 0, 0, 0, 0, 0, 0, 0]);
+    sendRoomUpdateToLobby(room, true);
   }, 1000);
 }
 
@@ -281,12 +228,7 @@ function handleAutoStart(room, player, payload) {
   if (player.slot !== room.master || room.state !== 1) return null;
   room.autoStart = !room.autoStart;
   const out = padded(payload, 3);
-  out[2] = room.autoStart ? 1 : 0;
-  if (!room.autoStart && room.autoStartCountdown) {
-    clearInterval(room.autoStartCountdown);
-    room.autoStartCountdown = null;
-    broadcastSystemMessage(room, 'Avvio automatico annullato.');
-  }
+  out[2] = room.autoStart ? 1 : 0; // switching it off cancels a running countdown at its next tick
   return { payload: out, updateLobby: true, checkAutoStart: true };
 }
 
@@ -971,7 +913,7 @@ function handleGamePacket(socket, pkt, db) {
   }
 
   if (result.updateLobby) sendRoomUpdateToLobby(room, true);
-  if (result.checkAutoStart) tryAutoStart(room);
+  if (result.checkAutoStart) tryAutoStart(room, db);
 }
 
 module.exports = { handleGamePacket, GAME_PACKET, handleScoreboardRequest, SCOREBOARD, HANDLERS, SUB };
