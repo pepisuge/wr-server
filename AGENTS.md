@@ -23,7 +23,7 @@ Private WarRock server in plain Node.js (CommonJS). Entry points: `node/auth-ser
   Damage, weapon and position still come from the client: see the open issues before relying on them.
 - Never log secrets (the login password is masked in `auth-server.js`).
 - Comments: say *why* in one or two lines. Experiment history belongs in the commit message or `docs/protocol/`, not the code.
-- Checks: `node --check <file>`; `node node/tools/test-hardening.js` (no DB); with servers running, `node node/tools/smoke-login.js <user> <pass>` and `node node/tools/test-gamesubs.js`.
+- Checks: `node --check <file>`; `node node/tools/test-hardening.js` and `node node/tools/test-rooms-shop.js` (no DB); with servers running, `node node/tools/smoke-login.js <user> <pass>` and `node node/tools/test-gamesubs.js`.
 
 ## Workflow (humans and agents)
 - Branch from `main`, open a PR, let CI pass; never push to `main` directly. One topic per PR.

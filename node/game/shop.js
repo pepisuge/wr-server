@@ -166,6 +166,7 @@ function handleItemshop(db) {
     // Memory first, so a second buy packet arriving meanwhile already sees the new balance/item. The charge and the
     // item are one transaction, and the client hears "bought" only once it is stored; on failure memory is undone.
     u.money -= price;
+    u.inventory.set(itemCode, { expireDate: Number.MAX_SAFE_INTEGER, retail: false }); // reserved; grantItem sets the real expiry
     return db
       .transaction(async (conn) => {
         const [res] = await conn.query('UPDATE user_details SET money = money - ? WHERE id = ? AND money >= ?', [price, u.id, price]);
