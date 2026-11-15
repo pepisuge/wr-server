@@ -708,14 +708,16 @@ function handleUseItem(room, player, payload) {
   // sender only, nothing applied) or that client never uses a box again.
   if (!item) return { payload: padded(payload, 7), selfTarget: true };
   const code = String(payload[payload.length - 1] || '').toUpperCase();
-  // a land mine only hurts enemies: not its owner, and not teammates outside FFA (the item stays where it is)
-  if (code === 'DU02' && (item.owner === player.slot || (room.mode !== FFA_MODE && item.team === player.team))) return null;
+  // Mines (land DU02, flash DS05) only go off for enemies: not their owner, and not teammates outside FFA (the item stays
+  // where it is). The reference treats the flash mine like an ammo box, so it blinded its own planter (live).
+  const mine = code === 'DU02' || code === 'DS05';
+  if (mine && (item.owner === player.slot || (room.mode !== FFA_MODE && item.team === player.team))) return null;
   room.groundItems.delete(id);
   const out = padded(payload, 7);
   out[3] = player.slot; // the receiving clients apply this packet to the player in payload[3] (found live: the health of slot 0 was overwritten)
   let others;
   switch (code) {
-    case 'DS05': // flash mine, ammo box
+    case 'DS05': // flash mine (the client blinds whoever is in payload[3]), ammo box
     case 'DU01':
       break;
     case 'DU02': // land mine
