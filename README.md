@@ -57,6 +57,7 @@ Protocol reference: [`docs/protocol`](docs/protocol/index.md), also published at
 | `GAME_SERVER_IP` | IP announced when Game registers (the server list itself uses the address the client reached Auth on) |
 | `GAME_SERVER_KEY` | shared Auth/Game key for the internal channel: **change it** on any reachable host |
 | `WR_PATCH_URL` | patch base URL sent to the launcher (default `http://<auth address>/wr/`) |
+| `WR_PATCH_VERSIONS` | version.cfg values echoed to the launcher, `Format,Launcher,Updater,Client,Sub,Option` (default `0,10,15,22,0,0` = client 22) |
 | `WR_SERVER_TYPE` | server type sent in the list (client 22 test: 65..70) |
 | `WR_MAX_CONN_PER_IP` | open connections allowed per client IP (default 10); raise it behind Docker Desktop or a proxy, where every client shares one IP |
 | `WR_WEB_PORT` | website port inside the game server (default 8080, `0` = off); put an HTTPS reverse proxy in front of it on the internet |
