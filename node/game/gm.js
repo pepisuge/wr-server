@@ -50,7 +50,7 @@ const MAX_CHAT_LINE = 50;
 // sentence), but for a LIST of independent items (each command in /gmhelp,
 // each map in /maps) it only guarantees whole *words* survive, not whole
 // *items* - a two-word map name like "Rusty Nails" or a multi-token command
-// usage like "/setpremium <giocatore|id> <tier 0-4> <giorni>" can still get
+// usage like "/setpremium <player|id> <tier 0-4> <days>" can still get
 // cut in half between two lines, which is exactly what made /gmhelp's output
 // hard to read once it stopped being one giant unreadable packet (Fase 38)
 // and became several oddly-cut ones instead. Use packItems below for lists.
@@ -94,7 +94,7 @@ function packItems(items, max, sep = ' | ') {
 // Tried "GM>> " only on the first line, to save characters (every other
 // line bare). Live test against the real client: line 1 rendered fully, but
 // every bare continuation line rendered as only its LAST bracketed token
-// ("/addmoney <giocatore|id> <importo>" showed as just "<giocatore|id>") -
+// ("/addmoney <player|id> <amount>" showed as just "<player|id>") -
 // not a length problem, a missing-marker one. Same lesson Fase 36 already
 // found for Notice1 (no ">>" marker -> broken/empty render), just for
 // WHISPER too: every line apparently needs its own ">>" to render its text
@@ -123,8 +123,8 @@ function scheduleReconnect(targetUser, callerSocket) {
   const seconds = RECONNECT_DELAY_MS / 1000;
   const msg =
     targetUser.socket === callerSocket
-      ? `Riconnettiti tra ${seconds}s per vedere le modifiche.`
-      : `Un GM ha aggiornato i tuoi dati. Riconnessione tra ${seconds}s...`;
+      ? `Reconnect in ${seconds}s to see the changes.`
+      : `A GM updated your account. Reconnecting in ${seconds}s...`;
   reply(targetUser.socket, msg);
   setTimeout(() => targetUser.socket.end(), RECONNECT_DELAY_MS);
 }
@@ -152,15 +152,15 @@ async function cmdSetLevel(socket, db, args) {
   const target = resolveTarget(args[0]);
   const level = Math.floor(Number(args[1]));
   if (!target || !(level >= 1 && level <= 100)) {
-    return reply(socket, 'Uso: /setlevel <giocatore|id> <livello 1-100>');
+    return reply(socket, 'Usage: /setlevel <player|id> <level 1-100>');
   }
 
   const xp = xpForLevel(level);
   if (target.online) target.online.xp = xp;
 
   const [result] = await db.query('UPDATE user_details SET xp = ? WHERE id = ?', [xp, target.id]);
-  if (result.affectedRows === 0) return reply(socket, `Nessun account con id ${target.id}.`);
-  reply(socket, `Livello di ${target.online ? target.online.displayname : target.id} impostato a ${level} (xp=${xp}).`);
+  if (result.affectedRows === 0) return reply(socket, `No account with id ${target.id}.`);
+  reply(socket, `Level of ${target.online ? target.online.displayname : target.id} set to ${level} (xp=${xp}).`);
   if (target.online) scheduleReconnect(target.online, socket);
 }
 
@@ -168,7 +168,7 @@ async function cmdAddMoney(socket, db, args) {
   const target = resolveTarget(args[0]);
   const amount = Math.trunc(Number(args[1]));
   if (!target || !Number.isFinite(amount)) {
-    return reply(socket, 'Uso: /addmoney <giocatore|id> <importo>');
+    return reply(socket, 'Usage: /addmoney <player|id> <amount>');
   }
 
   if (target.online) {
@@ -178,7 +178,7 @@ async function cmdAddMoney(socket, db, args) {
     // would report that other command's result instead of this one's.
     const newMoney = target.online.money;
     await db.query('UPDATE user_details SET money = GREATEST(0, CAST(money AS SIGNED) + ?) WHERE id = ?', [amount, target.id]);
-    reply(socket, `Denaro di ${target.online.displayname} ora: ${newMoney}.`);
+    reply(socket, `Money of ${target.online.displayname} now: ${newMoney}.`);
     return scheduleReconnect(target.online, socket);
   }
 
@@ -189,11 +189,11 @@ async function cmdAddMoney(socket, db, args) {
     'UPDATE user_details SET money = GREATEST(0, CAST(money AS SIGNED) + ?) WHERE id = ?',
     [amount, target.id]
   );
-  if (result.affectedRows === 0) return reply(socket, `Nessun account con id ${target.id}.`);
-  reply(socket, `Denaro aggiornato per l'account ${target.id}.`);
+  if (result.affectedRows === 0) return reply(socket, `No account with id ${target.id}.`);
+  reply(socket, `Money updated for account ${target.id}.`);
 }
 
-// giorni=0 grants the tier with no practical expiry (100 years out) instead
+// days=0 grants the tier with no practical expiry (100 years out) instead
 // of a real "never" - keeps checkPremiumExpiry()'s ">" comparison simple,
 // no special-casing a null/forever expiry date anywhere else.
 async function cmdSetPremium(socket, db, args) {
@@ -201,7 +201,7 @@ async function cmdSetPremium(socket, db, args) {
   const tier = Math.floor(Number(args[1]));
   const days = Number(args[2]);
   if (!target || !(tier >= 0 && tier <= 4) || !Number.isFinite(days) || days < 0) {
-    return reply(socket, 'Uso: /setpremium <giocatore|id> <tier 0-4> <giorni>');
+    return reply(socket, 'Usage: /setpremium <player|id> <tier 0-4> <days>');
   }
 
   const expireDate = Math.floor(Date.now() / 1000) + Math.round((days > 0 ? days : 36500) * 86400);
@@ -215,7 +215,7 @@ async function cmdSetPremium(socket, db, args) {
     expireDate,
     target.id,
   ]);
-  if (result.affectedRows === 0) return reply(socket, `Nessun account con id ${target.id}.`);
+  if (result.affectedRows === 0) return reply(socket, `No account with id ${target.id}.`);
 
   // No scheduleReconnect here unlike setlevel/addmoney: premium's live
   // effects (room-roster badge, XP bonus math) already read u.premium
@@ -224,13 +224,13 @@ async function cmdSetPremium(socket, db, args) {
   // known gap as level/money, not worth a forced kick. Consistent with
   // expiry itself being notify-only (see checkPremiumExpiry/ping.js).
   const label = target.online ? target.online.displayname : target.id;
-  reply(socket, `Premium di ${label} impostato a tier ${tier} per ${days > 0 ? `${days} giorni` : 'senza scadenza pratica'}.`);
+  reply(socket, `Premium of ${label} set to tier ${tier} for ${days > 0 ? `${days} days` : 'no expiry'}.`);
 }
 
 // Server-wide notice: a popup in the lobby, a yellow line inside rooms (chat.js sendNotice).
 function cmdNotice(socket, db, args) {
   const text = args.join(' ');
-  if (!text) return reply(socket, 'Uso: /notice <messaggio>');
+  if (!text) return reply(socket, 'Usage: /notice <message>');
   require('./chat').sendNotice(text); // lazy: chat.js requires this module
 }
 
@@ -240,10 +240,10 @@ function cmdNotice(socket, db, args) {
 // special-casing needed here.
 function cmdKick(socket, db, args) {
   const target = resolveTarget(args[0]);
-  if (!target?.online) return reply(socket, 'Uso: /kick <giocatore online>');
-  reply(target.online.socket, 'Sei stato disconnesso da un GM.');
+  if (!target?.online) return reply(socket, 'Usage: /kick <online player>');
+  reply(target.online.socket, 'You were disconnected by a GM.');
   target.online.socket.end();
-  reply(socket, `${target.online.displayname} disconnesso.`);
+  reply(socket, `${target.online.displayname} disconnected.`);
 }
 
 // Ported from ToXiiC-Core's "kickr" - removes the target from their current
@@ -252,41 +252,41 @@ function cmdKick(socket, db, args) {
 // a description, and a chat command list has no room for descriptions
 // without blowing past the per-line budget Fase 38 just fixed - a
 // self-explanatory name is the cheaper fix. Reuses the exact wire behavior
-// already fixed for the host-kick crash bug (Fase precedente): notify only,
+// already fixed for the host-kick crash bug: notify only,
 // let the target's own follow-up RoomLeave do the real removal - calling
 // removeFromRoom directly here would race ahead of it the same way that bug
 // did.
 function cmdKickRoom(socket, db, args) {
   const target = resolveTarget(args[0]);
   if (!target?.online || target.online.roomId === null) {
-    return reply(socket, 'Uso: /kickroom <giocatore in una stanza>');
+    return reply(socket, 'Usage: /kickroom <player in a room>');
   }
   const room = getChannel(target.online.channel).rooms.get(target.online.roomId);
   const player = room?.players.get(target.online.sessionId);
-  if (!player) return reply(socket, 'Stanza non trovata.');
+  if (!player) return reply(socket, 'Room not found.');
 
   target.online.socket.sendPacket(ROOM_KICK, [1, player.slot]);
-  reply(socket, `${target.online.displayname} rimosso dalla stanza.`);
+  reply(socket, `${target.online.displayname} removed from the room.`);
 }
 
 async function cmdMute(socket, db, args) {
   const target = resolveTarget(args[0]);
   const minutes = Math.floor(Number(args[1]));
-  if (!target || !(minutes > 0)) return reply(socket, 'Uso: /mute <giocatore|id> <minuti>');
+  if (!target || !(minutes > 0)) return reply(socket, 'Usage: /mute <player|id> <minutes>');
 
   const expire = Math.floor(Date.now() / 1000) + minutes * 60;
   if (target.online) target.online.mutedexpire = expire;
   await db.query('UPDATE user_details SET mutedexpire = ? WHERE id = ?', [expire, target.id]);
-  reply(socket, `${target.online ? target.online.displayname : target.id} silenziato per ${minutes} minuti.`);
+  reply(socket, `${target.online ? target.online.displayname : target.id} muted for ${minutes} minutes.`);
 }
 
 async function cmdUnmute(socket, db, args) {
   const target = resolveTarget(args[0]);
-  if (!target) return reply(socket, 'Uso: /unmute <giocatore|id>');
+  if (!target) return reply(socket, 'Usage: /unmute <player|id>');
 
   if (target.online) target.online.mutedexpire = 0;
   await db.query('UPDATE user_details SET mutedexpire = 0 WHERE id = ?', [target.id]);
-  reply(socket, `${target.online ? target.online.displayname : target.id} non è più silenziato.`);
+  reply(socket, `${target.online ? target.online.displayname : target.id} is no longer muted.`);
 }
 
 // Ban/unban reuse the SAME column auth/handlers.js already checks at login
@@ -296,59 +296,59 @@ async function cmdUnmute(socket, db, args) {
 // actually needed). Lives on the AUTH db, not the game db `db` param - see
 // setAuthDb at the top of this file for why.
 async function cmdBan(socket, db, args) {
-  if (!authDb) return reply(socket, 'Ban non disponibile: auth DB non collegato.');
+  if (!authDb) return reply(socket, 'Ban unavailable: auth DB not connected.');
   const target = resolveTarget(args[0]);
   const reason = args.slice(1).join(' ');
-  if (!target) return reply(socket, 'Uso: /ban <giocatore|id> [motivo]');
+  if (!target) return reply(socket, 'Usage: /ban <player|id> [reason]');
 
   const [result] = await authDb.query('UPDATE users SET status = 0, ban_until = 0 WHERE id = ?', [target.id]);
-  if (result.affectedRows === 0) return reply(socket, `Nessun account con id ${target.id}.`);
+  if (result.affectedRows === 0) return reply(socket, `No account with id ${target.id}.`);
   if (target.online) {
-    reply(target.online.socket, `Sei stato bannato.${reason ? ` Motivo: ${reason}` : ''}`);
+    reply(target.online.socket, `You have been banned.${reason ? ` Reason: ${reason}` : ''}`);
     target.online.socket.end();
   }
-  reply(socket, `Account ${target.online ? target.online.displayname : target.id} bannato.${reason ? ` (${reason})` : ''}`);
+  reply(socket, `Account ${target.online ? target.online.displayname : target.id} banned.${reason ? ` (${reason})` : ''}`);
 }
 
 async function cmdUnban(socket, db, args) {
-  if (!authDb) return reply(socket, 'Unban non disponibile: auth DB non collegato.');
+  if (!authDb) return reply(socket, 'Unban unavailable: auth DB not connected.');
   const target = resolveTarget(args[0]);
-  if (!target) return reply(socket, 'Uso: /unban <giocatore|id>');
+  if (!target) return reply(socket, 'Usage: /unban <player|id>');
 
   const [result] = await authDb.query('UPDATE users SET status = 1, ban_until = 0 WHERE id = ?', [target.id]);
-  if (result.affectedRows === 0) return reply(socket, `Nessun account con id ${target.id}.`);
-  reply(socket, `Account ${target.id} sbannato.`);
+  if (result.affectedRows === 0) return reply(socket, `No account with id ${target.id}.`);
+  reply(socket, `Account ${target.id} unbanned.`);
 }
 
 // Temporary ban: the same status=0 as /ban plus users.ban_until (sql/11); auth/handlers.js lifts it at the first login
 // after that time.
 async function cmdTempBan(socket, db, args) {
-  if (!authDb) return reply(socket, 'Ban non disponibile: auth DB non collegato.');
+  if (!authDb) return reply(socket, 'Ban unavailable: auth DB not connected.');
   const target = resolveTarget(args[0]);
   const hours = Number(args[1]);
   const reason = args.slice(2).join(' ');
-  if (!target || !(hours > 0)) return reply(socket, 'Uso: /tempban <giocatore|id> <ore> [motivo]');
+  if (!target || !(hours > 0)) return reply(socket, 'Usage: /tempban <player|id> <hours> [reason]');
 
   const until = Math.floor(Date.now() / 1000) + Math.round(hours * 3600);
   const [result] = await authDb.query('UPDATE users SET status = 0, ban_until = ? WHERE id = ?', [until, target.id]);
-  if (result.affectedRows === 0) return reply(socket, `Nessun account con id ${target.id}.`);
+  if (result.affectedRows === 0) return reply(socket, `No account with id ${target.id}.`);
   if (target.online) {
-    reply(target.online.socket, `Sei stato bannato per ${hours} ore.${reason ? ` Motivo: ${reason}` : ''}`);
+    reply(target.online.socket, `You have been banned for ${hours} hours.${reason ? ` Reason: ${reason}` : ''}`);
     target.online.socket.end();
   }
-  reply(socket, `Account ${target.online ? target.online.displayname : target.id} bannato per ${hours} ore.${reason ? ` (${reason})` : ''}`);
+  reply(socket, `Account ${target.online ? target.online.displayname : target.id} banned for ${hours} hours.${reason ? ` (${reason})` : ''}`);
 }
 
 // Recent anticheat strikes of an online player (anticheat.js keeps the last 10 per session).
 function cmdStrikes(socket, db, args) {
   const target = resolveTarget(args[0]);
-  if (!target?.online) return reply(socket, 'Uso: /strikes <giocatore online>');
+  if (!target?.online) return reply(socket, 'Usage: /strikes <online player>');
   const history = target.online.ac?.history || [];
-  if (!history.length) return reply(socket, `${target.online.displayname}: nessuna violazione in questa sessione.`);
+  if (!history.length) return reply(socket, `${target.online.displayname}: no strikes this session.`);
   const now = Date.now();
   replyLines(socket, [
-    `${target.online.displayname}: ${history.length} violazioni`,
-    ...history.map((h) => `${Math.round((now - h.t) / 60000)}min fa ${h.kind}: ${h.detail}`.slice(0, MAX_CHAT_LINE)),
+    `${target.online.displayname}: ${history.length} strikes`,
+    ...history.map((h) => `${Math.round((now - h.t) / 60000)}min ago ${h.kind}: ${h.detail}`.slice(0, MAX_CHAT_LINE)),
   ]);
 }
 
@@ -360,10 +360,10 @@ async function cmdGiveItem(socket, db, args) {
   const code = (args[1] || '').toUpperCase();
   const days = Math.floor(Number(args[2]));
   if (!target?.online || !code || !(days > 0)) {
-    return reply(socket, 'Uso: /giveitem <giocatore online> <codice> <giorni>');
+    return reply(socket, 'Usage: /giveitem <online player> <code> <days>');
   }
   await grantItem(db, target.online, code, days);
-  reply(socket, `${code} regalato a ${target.online.displayname} per ${days} giorni.`);
+  reply(socket, `${code} given to ${target.online.displayname} for ${days} days.`);
   scheduleReconnect(target.online, socket);
 }
 
@@ -371,31 +371,31 @@ async function cmdGiveRoom(socket, db, args) {
   const u = socket.user;
   const code = (args[0] || '').toUpperCase();
   const days = Math.floor(Number(args[1]));
-  if (u.roomId === null) return reply(socket, 'Devi essere in una stanza.');
-  if (!code || !(days > 0)) return reply(socket, 'Uso: /giveroom <codice> <giorni>');
+  if (u.roomId === null) return reply(socket, 'You must be in a room.');
+  if (!code || !(days > 0)) return reply(socket, 'Usage: /giveroom <code> <days>');
 
   const room = getChannel(u.channel).rooms.get(u.roomId);
   const targets = [...room.players.keys()].map((sid) => users.get(sid)).filter(Boolean);
   for (const t of targets) await grantItem(db, t, code, days);
-  reply(socket, `${code} regalato a tutta la stanza (${targets.length} giocatori) per ${days} giorni.`);
+  reply(socket, `${code} given to the whole room (${targets.length} players) for ${days} days.`);
   for (const t of targets) scheduleReconnect(t, socket);
 }
 
 function cmdUserInfo(socket, db, args) {
   const target = resolveTarget(args[0]);
-  if (!target) return reply(socket, 'Uso: /userinfo <giocatore|id>');
+  if (!target) return reply(socket, 'Usage: /userinfo <player|id>');
 
   if (!target.online) {
     return db.query('SELECT xp, money, premium, clanid, is_gm, mutedexpire FROM user_details WHERE id = ?', [target.id]).then(([rows]) => {
-      if (!rows[0]) return reply(socket, `Nessun account con id ${target.id}.`);
+      if (!rows[0]) return reply(socket, `No account with id ${target.id}.`);
       const r = rows[0];
       reply(socket, `#${target.id} [offline] lvl=${levelForXp(r.xp)} xp=${r.xp} money=${r.money} premium=${r.premium} clan=${r.clanid} gm=${r.is_gm}`);
     });
   }
 
   const t = target.online;
-  const room = t.roomId !== null ? `stanza ${t.roomId} (canale ${t.channel})` : `lobby (canale ${t.channel})`;
-  const mute = t.mutedexpire > Date.now() / 1000 ? `silenziato ${Math.ceil((t.mutedexpire - Date.now() / 1000) / 60)}min` : 'non silenziato';
+  const room = t.roomId !== null ? `room ${t.roomId} (channel ${t.channel})` : `lobby (channel ${t.channel})`;
+  const mute = t.mutedexpire > Date.now() / 1000 ? `muted ${Math.ceil((t.mutedexpire - Date.now() / 1000) / 60)}min` : 'not muted';
   reply(
     socket,
     `${t.displayname} #${t.id} lvl=${levelForXp(t.xp)} xp=${t.xp} money=${t.money} premium=${t.premium} clan=${t.clanId} gm=${t.isGm} ${room} ${mute}`
@@ -404,7 +404,7 @@ function cmdUserInfo(socket, db, args) {
 
 // The client 22 room list shows no spectate control we could trigger, so this sends the same 0x7330 request by hand.
 function cmdSpectate(socket, db, args) {
-  if (socket.user.roomId !== null) return reply(socket, 'Esci prima dalla stanza.');
+  if (socket.user.roomId !== null) return reply(socket, 'Leave your room first.');
   handleRoomSpectate(socket, { blocks: [1, args[0]] });
 }
 
@@ -412,13 +412,13 @@ function cmdRoomInfo(socket, db, args) {
   const u = socket.user;
   const roomId = Number(args[0]);
   const room = getChannel(u.channel).rooms.get(roomId);
-  if (!room) return reply(socket, `Nessuna stanza con id ${roomId} nel canale ${u.channel}.`);
+  if (!room) return reply(socket, `No room with id ${roomId} in channel ${u.channel}.`);
 
   reply(
     socket,
-    `#${room.id} "${room.name}" stato=${room.state === 2 ? 'Playing' : 'Waiting'} modo=${room.mode} mappa=${room.map} (${getMap(room.map)?.name || '?'}) ` +
-      `master(slot)=${room.master} giocatori=${room.players.size}/${room.maxPlayers} password=${room.hasPassword ? 'si' : 'no'} ` +
-      `lock=${room.userLimit ? 'si' : 'no'} autostart=${room.autoStart ? 'si' : 'no'}`
+    `#${room.id} "${room.name}" state=${room.state === 2 ? 'Playing' : 'Waiting'} mode=${room.mode} map=${room.map} (${getMap(room.map)?.name || '?'}) ` +
+      `master(slot)=${room.master} players=${room.players.size}/${room.maxPlayers} password=${room.hasPassword ? 'yes' : 'no'} ` +
+      `lock=${room.userLimit ? 'yes' : 'no'} autostart=${room.autoStart ? 'yes' : 'no'}`
   );
 }
 
@@ -436,7 +436,7 @@ async function cmdForceCloseRoom(socket, db, args) {
   const roomId = Number(args[0]);
   const chan = getChannel(u.channel);
   const room = chan.rooms.get(roomId);
-  if (!room) return reply(socket, `Nessuna stanza con id ${roomId}.`);
+  if (!room) return reply(socket, `No room with id ${roomId}.`);
 
   const memberIds = [...room.players.keys()];
   for (const sid of memberIds) {
@@ -447,7 +447,7 @@ async function cmdForceCloseRoom(socket, db, args) {
     member.socket.sendPacket(ROOM_LEAVE, [1, sid, oldSlot, stillOpen ? stillOpen.players.size : 0, stillOpen ? stillOpen.master : 0, member.xp, member.money]);
   }
   notifyLobbyAfterLeave(room);
-  reply(socket, `Stanza ${roomId} chiusa forzatamente (${memberIds.length} giocatori rimandati in lobby).`);
+  reply(socket, `Room ${roomId} closed (${memberIds.length} players sent to the lobby).`);
 }
 
 // Ported from ToXiiC-Core's "endgame" - forces the current match to end,
@@ -458,38 +458,38 @@ async function cmdForceCloseRoom(socket, db, args) {
 function cmdStart(socket) {
   const u = socket.user;
   const room = u.roomId === null ? null : getChannel(u.channel).rooms.get(u.roomId);
-  if (!room || room.state !== 1) return reply(socket, 'Devi essere in una stanza in attesa.');
+  if (!room || room.state !== 1) return reply(socket, 'You must be in a waiting room.');
   const me = room.players.get(u.sessionId);
-  if (room.master !== me?.slot && !setMaster(room, me)) return reply(socket, 'Stanza piena: non posso renderti master.');
+  if (room.master !== me?.slot && !setMaster(room, me)) return reply(socket, 'Room full: cannot make you master.');
   room.forceStart = true;
-  reply(socket, 'Avvio sbloccato: premi Start (niente controllo pronti/squadre).');
+  reply(socket, 'Start unlocked: press Start (no ready/team checks).');
 }
 
 // The GM becomes master of the room they are in, or makes another player in a room its master (rooms.js setMaster).
 function cmdTakeMaster(socket) {
   const u = socket.user;
   const room = u.roomId === null ? null : getChannel(u.channel).rooms.get(u.roomId);
-  if (!room) return reply(socket, 'Devi essere in una stanza.');
-  if (!setMaster(room, room.players.get(u.sessionId))) return reply(socket, 'Stanza piena: nessuno slot libero per annunciarlo.');
-  reply(socket, 'Ora sei il master della stanza.');
+  if (!room) return reply(socket, 'You must be in a room.');
+  if (!setMaster(room, room.players.get(u.sessionId))) return reply(socket, 'Room full: no free slot to announce it.');
+  reply(socket, 'You are now the room master.');
 }
 
 function cmdSetMaster(socket, db, args) {
   const target = resolveTarget(args[0]);
   const t = target?.online;
   const room = t && t.roomId !== null ? getChannel(t.channel).rooms.get(t.roomId) : null;
-  if (!room) return reply(socket, 'Uso: /setmaster <giocatore in una stanza>');
-  if (!setMaster(room, room.players.get(t.sessionId))) return reply(socket, 'Stanza piena: nessuno slot libero per annunciarlo.');
-  reply(socket, `${t.displayname} ora è il master della stanza ${room.id}.`);
+  if (!room) return reply(socket, 'Usage: /setmaster <player in a room>');
+  if (!setMaster(room, room.players.get(t.sessionId))) return reply(socket, 'Room full: no free slot to announce it.');
+  reply(socket, `${t.displayname} is now the master of room ${room.id}.`);
 }
 
 function cmdEndGame(socket, db, args) {
   const u = socket.user;
-  if (u.roomId === null) return reply(socket, 'Devi essere in una stanza.');
+  if (u.roomId === null) return reply(socket, 'You must be in a room.');
   const room = getChannel(u.channel).rooms.get(u.roomId);
-  if (room.state !== 2) return reply(socket, 'Nessuna partita in corso in questa stanza.');
+  if (room.state !== 2) return reply(socket, 'No match running in this room.');
   endRound(room, db);
-  reply(socket, 'Partita terminata forzatamente.');
+  reply(socket, 'Match ended.');
 }
 
 // Ported from ToXiiC-Core's "extendtime" - adds minutes to the room's
@@ -500,67 +500,62 @@ function cmdEndGame(socket, db, args) {
 function cmdExtendTime(socket, db, args) {
   const u = socket.user;
   const minutes = Number(args[0]);
-  if (u.roomId === null) return reply(socket, 'Devi essere in una stanza.');
-  if (!(minutes > 0)) return reply(socket, 'Uso: /extendtime <minuti>');
+  if (u.roomId === null) return reply(socket, 'You must be in a room.');
+  if (!(minutes > 0)) return reply(socket, 'Usage: /extendtime <minutes>');
   const room = getChannel(u.channel).rooms.get(u.roomId);
-  if (room.state !== 2) return reply(socket, 'Nessuna partita in corso in questa stanza.');
+  if (room.state !== 2) return reply(socket, 'No match running in this room.');
   room.downTick += minutes * 60000;
-  reply(socket, room.mode === 0 ? 'Attenzione: nessun effetto in modalità Explosive.' : `Timer esteso di ${minutes} minuti.`);
+  reply(socket, room.mode === 0 ? 'No effect in Explosive mode.' : `Timer extended by ${minutes} minutes.`);
 }
 
-// Non-porting addition (non presente in nessuno dei due riferimenti C#):
-// elenco rapido di chi è connesso ora, utile su un server con pochi account
-// di test. Esposto come /online, non /who - stessa ragione di
-// /kickroom/closeroom: un nome che si spiega da solo nella lista comandi.
+// Not in the C# references: who is online now. Named /online, not /who, to be self-explanatory in /gmhelp.
 function cmdWho(socket) {
-  const list = [...users.values()].map((u) => `${u.displayname}(${u.roomId !== null ? `stanza${u.roomId}` : 'lobby'})`);
-  reply(socket, list.length ? `${list.length} online: ${list.join(', ')}` : 'Nessuno online.');
+  const list = [...users.values()].map((u) => `${u.displayname}(${u.roomId !== null ? `room${u.roomId}` : 'lobby'})`);
+  reply(socket, list.length ? `${list.length} online: ${list.join(', ')}` : 'Nobody online.');
 }
 
-// Non-porting addition: un avviso diretto al target prima di silenziare/
-// espellere/bannare, riusando reply() ma indirizzato al target invece che a
-// chi lancia il comando.
+// Not in the C# references: a direct warning to the target before a mute/kick/ban.
 function cmdWarn(socket, db, args) {
   const target = resolveTarget(args[0]);
   const text = args.slice(1).join(' ');
-  if (!target?.online || !text) return reply(socket, 'Uso: /warn <giocatore online> <messaggio>');
-  reply(target.online.socket, `Avviso da un GM: ${text}`);
-  reply(socket, `Avviso inviato a ${target.online.displayname}.`);
+  if (!target?.online || !text) return reply(socket, 'Usage: /warn <online player> <message>');
+  reply(target.online.socket, `Warning from a GM: ${text}`);
+  reply(socket, `Warning sent to ${target.online.displayname}.`);
 }
 
 // Named /gmhelp, not /help - the client itself intercepts "/help" locally
 // (shows its own built-in command list, never reaches the server as chat).
 // One array entry per command - packItems below only ever joins WHOLE
-// entries onto a line, so a multi-token usage like "/setpremium <giocatore|id>
-// <tier 0-4> <giorni>" can never be cut in half across two chat lines the
+// entries onto a line, so a multi-token usage like "/setpremium <player|id>
+// <tier 0-4> <days>" can never be cut in half across two chat lines the
 // way wrapLines' word-level wrap could (Fase 38's fix helped readability but
 // didn't fully solve it - see packItems' own comment above).
 const HELP_COMMANDS = [
-  '/setlevel <giocatore|id> <livello 1-100>',
-  '/addmoney <giocatore|id> <importo>',
-  '/setpremium <giocatore|id> <tier 0-4> <giorni>',
+  '/setlevel <player|id> <level 1-100>',
+  '/addmoney <player|id> <amount>',
+  '/setpremium <player|id> <tier 0-4> <days>',
   '/notice <msg>',
-  '/kick <giocatore>',
-  '/kickroom <giocatore>',
-  '/mute <giocatore> <minuti>',
-  '/unmute <giocatore>',
-  '/ban <giocatore> [motivo]',
-  '/unban <giocatore>',
-  '/giveitem <giocatore> <codice> <giorni>',
-  '/giveroom <codice> <giorni>',
-  '/userinfo <giocatore>',
+  '/kick <player>',
+  '/kickroom <player>',
+  '/mute <player> <minutes>',
+  '/unmute <player>',
+  '/ban <player> [reason]',
+  '/unban <player>',
+  '/giveitem <player> <code> <days>',
+  '/giveroom <code> <days>',
+  '/userinfo <player>',
   '/roominfo <id>',
-  '/spectate <id stanza>',
+  '/spectate <room id>',
   '/closeroom <id>',
-  '/start (sblocca, poi premi Start)',
+  '/start (unlock, then press Start)',
   '/takemaster',
-  '/setmaster <giocatore>',
+  '/setmaster <player>',
   '/endgame',
-  '/extendtime <minuti>',
+  '/extendtime <minutes>',
   '/online',
-  '/warn <giocatore> <msg>',
-  '/strikes <giocatore>',
-  '/tempban <giocatore> <ore> [motivo]',
+  '/warn <player> <msg>',
+  '/strikes <player>',
+  '/tempban <player> <hours> [reason]',
   '/gmhelp',
 ];
 
@@ -600,7 +595,7 @@ const COMMANDS = {
 function handleGmCommand(socket, db, text) {
   const [name, ...args] = text.slice(1).split(' ').filter(Boolean);
   const cmd = COMMANDS[(name || '').toLowerCase()];
-  if (!cmd) return reply(socket, `Comando sconosciuto: ${name || ''}. Usa /gmhelp.`);
+  if (!cmd) return reply(socket, `Unknown command: ${name || ''}. Use /gmhelp.`);
 
   // Guard once here, not per-command: an unexpected error (bad DB input,
   // etc.) must never crash the whole process over one chat message - it did
@@ -608,7 +603,7 @@ function handleGmCommand(socket, db, text) {
   // cmdAddMoney) before this existed.
   Promise.resolve(cmd(socket, db, args)).catch((err) => {
     console.error('GM command failed:', err.message);
-    reply(socket, `Errore eseguendo il comando: ${err.message}`);
+    reply(socket, `Command failed: ${err.message}`);
   });
 }
 

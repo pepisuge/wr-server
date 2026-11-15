@@ -64,7 +64,7 @@ function handleChat(socket, pkt, db) {
   // returned by this point, so a muted GM can still run /unmute on themself.
   if (u.mutedexpire > Math.floor(Date.now() / 1000)) {
     const minutesLeft = Math.ceil((u.mutedexpire - Date.now() / 1000) / 60);
-    socket.sendPacket(CHAT, [1, 0, 'System', TYPE.WHISPER, u.sessionId, u.displayname, `System>> Sei silenziato ancora per ${minutesLeft} minuti.`]);
+    socket.sendPacket(CHAT, [1, 0, 'System', TYPE.WHISPER, u.sessionId, u.displayname, `System>> You are muted for ${minutesLeft} more minutes.`]);
     return;
   }
 

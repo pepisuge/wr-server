@@ -10,8 +10,7 @@ const PING = 0x6400;
 const CHAT = 0x7400;
 const NOTICE = 1; // Game/Enums/ChatType.cs Notice1 - see gm.js for why this is the "system message" type
 const INTERVAL_MS = 5000;
-// Non invasivo: 4 ping mancati (20s) prima di considerare la connessione
-// morta - assorbe un lag/freeze temporaneo del client senza scollegarlo.
+// 4 missed pings (20 s) before the connection counts as dead: absorbs a short client lag/freeze.
 const PONG_TIMEOUT_MS = Number(process.env.WR_PONG_TIMEOUT_MS) || INTERVAL_MS * 4; // WR_PONG_TIMEOUT_MS: raise while a debugger freezes the client
 
 function premiumTimeLeft(u) {
@@ -21,8 +20,7 @@ function premiumTimeLeft(u) {
 }
 
 // The client already replies to every Ping with its own PING-id packet
-// (visto nei log: `id=25600` in ingresso) - prima veniva scartato come
-// pacchetto sconosciuto. Registrata in handlers.js's dispatch map.
+// (seen in the logs as incoming `id=25600`), registered in handlers.js's dispatch map.
 function handlePingReply(socket, pkt) {
   if (!socket.user) return;
   socket.user.lastPong = Date.now();
@@ -48,7 +46,7 @@ function startPingLoop(db) {
       // their next natural relogin - same known limit as GM level/money
       // changes (see gm.js).
       if (checkPremiumExpiry(db, u)) {
-        u.socket.sendPacket(CHAT, [1, 0, 'GM', NOTICE, 0, 'NULL', 'GM>> Il tuo premium è scaduto.']);
+        u.socket.sendPacket(CHAT, [1, 0, 'GM', NOTICE, 0, 'NULL', 'GM>> Your premium has expired.']);
       }
       u.socket.sendPacket(PING, [INTERVAL_MS, 0, 0, -1, 4, GameConfig.expRate, GameConfig.dinarRate, premiumTimeLeft(u)]);
     }
