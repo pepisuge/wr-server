@@ -23,10 +23,20 @@ function logPacket(label, pkt) {
   if (DEBUG) console.log(`${label} tick=${pkt.tick} id=${pkt.id} blocks=[${pkt.blocks.join(', ')}]`);
 }
 
+// Highest sql/ patch this code needs (sql/12 records them in wres2.schema_version). Bump with every new patch.
+const SCHEMA_VERSION = 12;
+async function checkSchema(db) {
+  const [rows] = await db.query('SELECT MAX(version) AS v FROM schema_version').catch(() => [[{ v: null }]]);
+  const v = rows[0].v;
+  if (v === null) console.warn('Game server: no schema_version table: apply the sql/ patches up to sql/12-schema-version.sql.');
+  else if (v < SCHEMA_VERSION) console.warn(`Game server: DB schema is at sql/${v}, this code needs sql/${SCHEMA_VERSION}: apply the missing sql/ patches.`);
+}
+
 async function main() {
   const db = createPool(config.game.db);
   await db.query('SELECT 1');
   console.log('Game server: DB ok.');
+  await checkSchema(db);
 
   // /ban and /unban (gm.js) mutate the auth DB's users.status - the same
   // column auth/handlers.js already checks at login - so the game process
