@@ -62,7 +62,7 @@ Validation order: code/format, for sale, inventory space (max 32), premium, leve
 
 **The client draws the shop from its own data files and sends the price index it chose**; the server checks it against `item_shop.cost`. An unknown code, a duration index out of range or a price mismatch **closes the connection** (treated as tampering). Keep the DB prices identical to what the client shows. Index 4 (permanent) is accepted.
 
-**Renewal**: buying a still-valid item you own extends it from its current expiry: the existing `user_inventory` row's `length` grows (the reference inserted a second row and extended only memory, so the expiry could go back at the next login). If several rows for one code exist (re-bought after expiry, GM grants), the one with the furthest expiry wins at login. (needs live test)
+**Renewal**: buying a still-valid item you own extends it from its current expiry: the existing `user_inventory` row's `length` grows (the reference inserted a second row and extended only memory, so the expiry could go back at the next login). If several rows for one code exist (re-bought after expiry, GM grants), the one with the furthest expiry wins at login.
 
 ### Equipment (`0x7512` = 29970)
 
