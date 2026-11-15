@@ -73,6 +73,19 @@ OUT(broadcast) id=30000 fields=[1, master slot, room id, 1, 4, 1, 0, map, 0, 0, 
 
 The header type (4th field) must be **1** (room): the client routes type 2 to the in-match handler, and earlier attempts that sent type 2 left the room "Playing" with no client in a match. Un-readying, unbalancing the teams or switching autostart off cancels the countdown.
 
+## Votekick
+
+GameSub 61, header type 2 (`game/votekick.js`). Protocol from WarRock-ToXiiC-Core, checked against client 22 (`FUN_004e45a0` handler, `FUN_005e4140` HUD, Y/N keys in `FUN_005dcf..`):
+
+| Direction | `payload[2]` | Other fields | Meaning |
+|---|---|---|---|
+| C -> S | 0 | `[3]` target slot | request, captured: `[0, 0, 2, 61, 1, 0, 0, 3, 0, ...]` |
+| S -> target's team | 1 | `[3]` target, `[6]` requester | vote open: "X has requested to votekick Y", 30 s, [Y]/[N] |
+| C -> S | 1 | `[3]` target | **Y** pressed. **N** sends nothing, so every vote received is a yes |
+| S -> target's team | 2 | `[3]` target, `[5]` | result: `[5] >= 80` shows "has been kicked" (the reference's 75 would show "was not kicked" on this client) |
+
+Rules (reference): same team only, not FFA, the team has 4+ players, one vote at a time, a majority of the target's team (target included), 60 s between votes, the kicked player cannot rejoin the room for 5 minutes. Errors are a bare `GAME_PACKET` `[code]`: 96150 in progress, 96151 cannot now, 96152 invalid candidate, 96153 opposing team, 96154 need 4 players. The kick itself is the master-kick notice (`ROOM_KICK`), after which the client leaves on its own.
+
 ## Minor subtypes
 
 - `WeaponSwitch` (155): current weapon at `payload[2]`, rebroadcast; arrives in pairs. Not validated against inventory.

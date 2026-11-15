@@ -73,6 +73,7 @@ Envelope: `[sender slot, room id, unidentified field, subtype, ...payload]`.
 | 56 | `SIDE_UPDATE` | team change = slot change |
 | 58 | `USER_LIMIT` | host entry lock |
 | 59 | `PING_LIMIT` | |
+| 61 | `VOTE_KICK` | see [match](match#votekick) |
 | 62 | `AUTO_START` | toggle |
 | 100 | `CONFIRM_SPAWN` | fire-and-forget |
 | 103 | `PLAYER_DAMAGE` | weapon at `payload[22]`, headshot flag at index 17 |
@@ -142,7 +143,7 @@ Envelope: `[sender slot, room id, unidentified field, subtype, ...payload]`.
 Good places to contribute:
 
 - **Conquest** mode, **vehicles** and artillery (`ObjectDamage`).
-- **Votekick**, item **renewal**, premium `cash` currency, `UseItem`/`RemoveItem` (stamina, HP kit effects).
+- Item **renewal**, premium `cash` currency, `UseItem`/`RemoveItem` (stamina, HP kit effects).
 - **Damage falloff by distance**: no distance field identified in `PlayerDamage`.
 - **Invisible scripted player** ([UDP](udp#open-problem-the-invisible-fake-player)).
 - **Scoreboard assist column**: computed by the client, not drivable.

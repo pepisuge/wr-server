@@ -11,6 +11,7 @@ const { getItem, codeById, DEFAULT_ITEMS } = require('./items');
 const { ownsItem } = require('./inventory');
 const { markSpawn, fallDamaged, strike, isTainted } = require('./anticheat');
 const { record } = require('./record');
+const { handleVoteKick, VOTE_KICK } = require('./votekick');
 
 const GAME_PACKET = 0x7530;
 const SCOREBOARD = 0x7550;
@@ -824,6 +825,7 @@ function handleRoundEndConfirm(room, player) {
 }
 
 const HANDLERS = {
+  [VOTE_KICK]: handleVoteKick,
   [SUB.READY]: handleReady,
   [SUB.SIDE_UPDATE]: handleSideUpdate,
   [SUB.USER_LIMIT]: handleUserLimit,

@@ -373,6 +373,10 @@ function handleRoomJoin(socket, pkt) {
     socket.sendPacket(ROOM_JOIN, [94300]); // BadLevel
     return;
   }
+  if (room.voteLocked?.get(u.id) > Date.now()) {
+    socket.sendPacket(ROOM_JOIN, [94010]); // votekicked from this room less than 5 minutes ago (votekick.js)
+    return;
+  }
   if (room.userLimit) {
     socket.sendPacket(ROOM_JOIN, [94060]); // UsersExceeded (host locked the room)
     return;
