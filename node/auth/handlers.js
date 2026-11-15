@@ -69,8 +69,11 @@ async function upgradeToScrypt(db, userId, password) {
 // Same order as the client's version.cfg: Format, Launcher, Updater, Client, Sub, Option.
 // Echoing the installed versions (client 22: 0/10/15/22/0/0) = "already up to date" and
 // the launcher leaves version.cfg alone; the C# reference sends all 0, which made client 22
-// rewrite Updater=0. Request carries no version, so this must match the client you test with.
-const PATCH_VERSIONS = [0, 10, 15, 22, 0, 0];
+// rewrite Updater=0. Request carries no version, so this must match the client in use: WR_PATCH_VERSIONS overrides it.
+const PATCH_VERSIONS = (process.env.WR_PATCH_VERSIONS || '0,10,15,22,0,0').split(',').map(Number);
+if (PATCH_VERSIONS.length !== 6 || !PATCH_VERSIONS.every((v) => Number.isInteger(v) && v >= 0)) {
+  throw new Error('WR_PATCH_VERSIONS must be 6 comma-separated integers (Format,Launcher,Updater,Client,Sub,Option)');
+}
 
 function handleLauncher(socket) {
   // Patch base URL: the address this client used to reach us (works from a VM / LAN, same trick as the game server IP)
