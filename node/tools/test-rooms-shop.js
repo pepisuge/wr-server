@@ -131,5 +131,40 @@ async function testShop() {
   console.log('OK: shop');
 }
 
+function testVoteKick() {
+  const { handleVoteKick } = require('../game/votekick');
+  const { getChannel } = require('../game/state');
+  const room = { id: 7, channel: 1, mode: 2, state: 2, enableVoteKick: true, levelLimit: 0, maxPlayers: 16, players: new Map() };
+  getChannel(1).rooms.set(7, room);
+  const add = (slot, team) => { const u = mkUser({ roomId: 7 }); room.players.set(u.sessionId, { sessionId: u.sessionId, userId: u.id, slot, team }); return u; };
+  const [a, b, c, d] = [0, 1, 2, 3].map((s) => add(s, 0));
+  const e = add(8, 1);
+  const vote = (u, type, target) => handleVoteKick(room, room.players.get(u.sessionId), [0, 0, type, target], u);
+  const err = (u) => u.socket.last(0x7530)?.[0];
+
+  vote(a, 0, 8); assert.strictEqual(err(a), 96153, 'opposing team');
+  vote(a, 0, 0); assert.strictEqual(err(a), 96152, 'self');
+  const rawE = e.socket.raw;
+  vote(a, 0, 1); assert.ok(room.vote, 'vote opened');
+  assert.strictEqual(e.socket.raw, rawE, 'other team does not see it');
+  vote(c, 0, 3); assert.strictEqual(err(c), 96150, 'one vote at a time');
+  vote(e, 1, 1); vote(a, 1, 1); assert.strictEqual(room.vote.yes.size, 1, 'other team and repeated votes ignored');
+  vote(c, 1, 1); assert.ok(room.vote, '2 of 4 is not a majority');
+  vote(d, 1, 1); assert.strictEqual(room.vote, null, '3 of 4 kicks');
+  assert.deepStrictEqual(b.socket.last(rooms.ROOM_KICK), [1, 1]);
+  vote(a, 0, 2); assert.strictEqual(err(a), 96151, 'cooldown after a vote');
+
+  // The kicked player's client leaves; it cannot come back for 5 minutes.
+  rooms.handleRoomLeave(b.socket, noDb);
+  rooms.handleRoomJoin(b.socket, { blocks: [7, ''] });
+  assert.strictEqual(b.socket.last(rooms.ROOM_JOIN)[0], 94010);
+
+  room.voteCooldownUntil = 0;
+  vote(a, 0, 2); assert.strictEqual(err(a), 96154, 'three players left on the team');
+  clearTimeout(room.vote?.timer);
+  console.log('OK: votekick');
+}
+
 testRooms();
+testVoteKick();
 testShop().then(() => process.exit(0), (e) => { console.error(e); process.exit(1); });
