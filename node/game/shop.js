@@ -100,12 +100,16 @@ const NICKNAME_RE = /^[a-zA-Z0-9]{3,16}$/;
 const RESERVED_RE = /^(gm|system|notice|clansystem|admin)/i;
 const validNickname = (name) => NICKNAME_RE.test(name) && !RESERVED_RE.test(name);
 
-// Replies are ToXiiC's SP_CashItemUse: [1111, 1, code, itemlist, slotState, ...per item]. A refusal is a whisper:
-// the reference just stays silent.
+// Replies are ToXiiC's SP_CashItemUse: [1111, 1, code, itemlist, slotState, ...per item], or [1111, error, code,
+// itemlist]. Client 22's 0x7800 handler (FUN_005f8aa0) shows a message box per error: 74070 (and -1) = m134 "This
+// WarRock nickname has already been taken", 74100 = m134_7 (length/characters, Korean text only), 74110 = m134_8
+// (forbidden word, Korean only), 74030 = m134_6 (empty). Without a reply the inventory window stays waiting.
+const USE_ERROR = { NAME_TAKEN: 74070, NAME_FORMAT: 74100 };
+
 async function handleUseItem(socket, db, u, pkt) {
   const itemCode = String(pkt.blocks[3] || '').toUpperCase();
   if (!ownsItem(u.inventory, itemCode)) return;
-  const refuse = (text) => require('./chat').sendSystemWhisper(socket, text); // lazy: chat -> gm -> shop
+  const refuse = (code) => socket.sendPacket(CASH_ITEM, [USE_ITEM, code, itemCode, buildItemlist(u.inventory)]);
 
   if (itemCode === 'CB03') {
     u.kills = 0;
@@ -119,12 +123,13 @@ async function handleUseItem(socket, db, u, pkt) {
 
   if (itemCode === 'CB01') {
     const nickname = String(pkt.blocks[4] || '').trim();
-    if (!validNickname(nickname)) return refuse('Nickname: 3-16 letters or digits, not a staff/system name.');
+    if (!NICKNAME_RE.test(nickname)) return refuse(USE_ERROR.NAME_FORMAT);
+    if (RESERVED_RE.test(nickname)) return refuse(USE_ERROR.NAME_TAKEN); // as if taken: the English client has no other text
     const entry = u.inventory.get(itemCode);
     if (entry.busy) return; // a second packet while the first rename is still checking the name
     entry.busy = true;
     const renamed = await renameDisplayname(u, nickname).finally(() => delete entry.busy);
-    if (!renamed) return refuse(`The nickname ${nickname} is taken.`);
+    if (!renamed) return refuse(USE_ERROR.NAME_TAKEN);
     removeItem(db, u, itemCode);
     return socket.sendPacket(CASH_ITEM, [USE_ITEM, 1, itemCode, buildItemlist(u.inventory), buildSlotState(u, u.inventory), u.displayname]);
   }

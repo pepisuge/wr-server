@@ -160,9 +160,11 @@ async function testCashItemUse() {
   taken = true;
   await use(u, 'CB01', 'newnick');
   assert.ok(u.inventory.has('CB01') && u.displayname !== 'newnick', 'taken name: nothing spent');
+  assert.deepStrictEqual(u.socket.last(CASH_ITEM).slice(0, 3), [1111, 74070, 'CB01'], 'client shows "already taken"');
   taken = false;
   for (const bad of ['no!', 'System', 'SYSTEMx', 'GM_Bob', 'gmbob', 'Notice', 'Admin1']) await use(u, 'CB01', bad);
   assert.ok(u.inventory.has('CB01') && u.displayname.startsWith('p'), 'invalid or reserved name: nothing spent');
+  assert.strictEqual(u.socket.last(CASH_ITEM)[1], 74070, 'reserved (last tried: Admin1) shows "already taken"');
   await Promise.all([use(u, 'CB01', 'newnick'), use(u, 'CB01', 'other')]);
   assert.strictEqual(u.displayname, 'newnick', 'one item, one rename');
   assert.ok(!u.inventory.has('CB01'));
