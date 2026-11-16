@@ -294,6 +294,24 @@ const { users } = require('../game/state');
     const [c1, c2] = [clan.clans.get(81), clan.clans.get(82)];
     assert.deepStrictEqual([c1.wins, c1.draws, c1.losses, c2.wins, c2.draws, c2.losses], [2, 1, 0, 0, 1, 2], 'tickets win, draw, leaver loses');
     assert.strictEqual(clan.clanExp(c1), 2500);
+
+    // clan war challenge (#42): the other clan's leader accepts (room created for them) or declines
+    const leader = (id, clanId, rank = clan.RANK.MASTER) => ({ id, sessionId: id, displayname: `p${id}`, clanId, clanRank: rank, channel: null, roomId: null });
+    const [boss81, boss82] = [leader(601, 81), leader(602, 82)];
+    assert.ok(clan.declareWar(leader(603, 82, clan.RANK.MEMBER), 81).error, 'members cannot declare');
+    assert.deepStrictEqual(clan.declareWar(boss81, 82), {}, 'challenge sent');
+    assert.ok(clan.declareWar(boss81, 82).error, 'one open challenge per pair');
+    assert.deepStrictEqual(clan.warChallengesTo(82).map((x) => x.id), [81]);
+    assert.ok(clan.acceptWar(boss81, 82).error, 'the challenger cannot accept its own challenge');
+    assert.deepStrictEqual(clan.declineWar(boss82, 81), {}, 'declined');
+    assert.ok(clan.declineWar(boss82, 81).error, 'nothing left to decline');
+    clan.declareWar(boss81, 82);
+    assert.ok(clan.acceptWar(boss82, 81).error, 'accepting needs a lobby');
+    Object.assign(boss82, { channel: 1, socket: { destroyed: false, sendPacket() {}, write() {} } });
+    const { room: warRoom } = clan.declareWar(boss82, 81); // declaring back = accepting
+    assert.ok(warRoom && warRoom.isClanWar === 1 && warRoom.clan1 === 82 && warRoom.clan2 === 81, 'war room for the accepter');
+    assert.strictEqual(clan.warChallengesTo(82).length, 0, 'challenge used up');
+    require('../game/state').getChannel(1).rooms.delete(warRoom.id);
     clan.clans.delete(81);
     clan.clans.delete(82);
   }

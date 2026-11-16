@@ -543,25 +543,70 @@ function setEmblem(db, u, emblem, data = null) {
 }
 
 // Clan war is self-designed (no captured client flow starts one): START_WAR (1000) is outside the real 0-17 subtypes.
-// No accept step: the room exists at once. require('./rooms') stays lazy: rooms.js requires this file.
-// Shared with the website. The declaring player must be online in a lobby: the room is theirs (they become its master).
-function declareWar(u, opponentId) {
+// A declaration is a challenge; a master/officer of the other clan accepts it (the war room is created for them) or
+// declines it. Declaring on a clan that already challenged yours accepts. Shared with the website.
+// ponytail: challenges live in memory, a server restart drops them (they expire in 10 minutes anyway).
+const WAR_CHALLENGE_MS = 10 * 60 * 1000;
+const warChallenges = new Map(); // `${fromClan}-${toClan}` -> expiry time
+
+function pendingChallenge(from, to) {
+  const key = `${from}-${to}`;
+  if (warChallenges.get(key) > Date.now()) return true;
+  warChallenges.delete(key);
+  return false;
+}
+
+// Clans that challenged clanId and are still waiting for an answer.
+function warChallengesTo(clanId) {
+  return [...clans.values()].filter((c) => pendingChallenge(c.id, clanId));
+}
+
+function warLeader(u, opponentId) {
   const clan = clans.get(u.clanId);
-  if (!clan || (u.clanRank !== RANK.MASTER && u.clanRank !== RANK.OFFICER)) return { error: 'Only the master or an officer can declare war.' };
+  if (!clan || (u.clanRank !== RANK.MASTER && u.clanRank !== RANK.OFFICER)) return { error: 'Only the master or an officer can do this.' };
   const opponent = clans.get(opponentId);
   if (!opponent || opponentId === u.clanId) return { error: 'Choose another clan.' };
-  if (!u.socket || u.channel === null || u.roomId !== null) return { error: 'Be in a game lobby (not in a room) to declare war: the war room is created for you.' };
+  return { clan, opponent };
+}
 
+function declareWar(u, opponentId) {
+  const { error, clan, opponent } = warLeader(u, opponentId);
+  if (error) return { error };
+  if (pendingChallenge(opponentId, clan.id)) return acceptWar(u, opponentId);
+  if (pendingChallenge(clan.id, opponentId)) return { error: `${opponent.name} has not answered your challenge yet.` };
+  warChallenges.set(`${clan.id}-${opponentId}`, Date.now() + WAR_CHALLENGE_MS);
+  chat().sendClanNotice(opponentId, `${clan.name} challenges your clan to a war! A master or officer accepts or declines it on the Clan page within 10 minutes.`);
+  chat().sendClanNotice(clan.id, `War challenge sent to ${opponent.name}.`);
+  return {};
+}
+
+// The accepting player must be online in a lobby: the room is theirs (they become its master). require('./rooms')
+// stays lazy: rooms.js requires this file.
+function acceptWar(u, challengerId) {
+  const { error, clan, opponent } = warLeader(u, challengerId);
+  if (error) return { error };
+  if (!pendingChallenge(challengerId, clan.id)) return { error: 'No open challenge from that clan (it expires after 10 minutes).' };
+  if (!u.socket || u.channel === null || u.roomId !== null) return { error: 'Be in a game lobby (not in a room) to accept: the war room is created for you.' };
+  warChallenges.delete(`${challengerId}-${clan.id}`);
   const { createClanWarRoom } = require('./rooms');
-  const room = createClanWarRoom(u, opponentId);
-  chat().sendClanNotice(opponentId, `${clan.name} declared war on your clan! Join room #${room.id} (channel ${u.channel}).`);
+  const room = createClanWarRoom(u, challengerId);
+  chat().sendClanNotice(challengerId, `${clan.name} accepted your war! Join room #${room.id} (channel ${u.channel}).`);
   chat().sendClanNotice(clan.id, `War on ${opponent.name}: room #${room.id} is ready, join it.`);
   return { room };
 }
 
+function declineWar(u, challengerId) {
+  const { error, clan } = warLeader(u, challengerId);
+  if (error) return { error };
+  if (!warChallenges.delete(`${challengerId}-${clan.id}`)) return { error: 'No open challenge from that clan.' };
+  chat().sendClanNotice(challengerId, `${clan.name} declined your war challenge.`);
+  return {};
+}
+
 function handleStartWar(socket, db, payload) {
-  const { room } = declareWar(socket.user, Number(payload[0]));
-  sendReply(socket, SUB.START_WAR, room ? [1, room.id] : [0]);
+  // [1, room id] when it accepted a challenge, [1, -1] when it sent one, [0] on error.
+  const { error, room } = declareWar(socket.user, Number(payload[0]));
+  sendReply(socket, SUB.START_WAR, error ? [0] : [1, room ? room.id : -1]);
 }
 
 function handleClanSystem(db) {
@@ -608,6 +653,9 @@ module.exports = {
   clanExp,
   recordWar,
   declareWar,
+  acceptWar,
+  declineWar,
+  warChallengesTo,
   setEmblem,
   clans,
   memberOf,
