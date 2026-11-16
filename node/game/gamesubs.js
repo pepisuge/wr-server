@@ -15,14 +15,7 @@ const { handleVoteKick, VOTE_KICK } = require('./votekick');
 
 const GAME_PACKET = 0x7530;
 const SCOREBOARD = 0x7550;
-// Game/Enums/Packets.cs's GameCountDown - exists in the reference but is
-// dead code there (Packets/CountDown.cs ignores its own `seconds` parameter
-// and always appends a literal 0, no caller anywhere in either reference).
-// Not a port: an experiment to see whether the real client reacts to this
-// opcode with a native countdown UI, since three attempts at triggering a
-// match via GAME_PACKET/START_REPLY alone (instant, after a chat countdown,
-// with a correctly-padded payload) all left the server in a real Playing
-// state with zero visible client reaction.
+// Dead code in the reference; the autostart countdown below uses it for the client's "Game starts in N" lines.
 const GAME_COUNTDOWN = 0x7531;
 
 // Game/Enums/Mode.cs - only the three modes actually implemented here.
@@ -151,11 +144,7 @@ function beginMatch(room, db) {
   room.groundItems = new Map();
   for (const p of players) p.itemsPlanted = 0;
 
-  // Ported from Room.Start()'s Flags/SpawnFlags setup (maps.js, backed by
-  // the real map_data table). Doesn't pick which flag Spawn's index maps to
-  // (see nextSpawnSlot) - this just makes the map's real two team spawn-flag
-  // indices available on the room for logging/future flag-capture work,
-  // instead of being invisible.
+  // Room.Start()'s flags: the map's flag count and its two team spawn flags (map_data), logged; no capture logic yet.
   const map = getMap(room.map);
   if (map) {
     room.flags = new Array(map.flagCount).fill(-1);
@@ -170,10 +159,7 @@ function beginMatch(room, db) {
   room.tickets = [TDM_TICKETS[room.setting] ?? 30, TDM_TICKETS[room.setting] ?? 30];
   room.state = 2; // Playing
   startRoundTimer(room, db);
-  // Explosive's own round-state init (currentRound/teamRounds/bomb/downTick)
-  // must run after startRoundTimer - that call unconditionally stamps a
-  // generic downTick (3600000) first, which initExplosiveMatch then
-  // overwrites with the real per-round time (Fase 27).
+  // After startRoundTimer, which stamps a generic downTick that Explosive replaces with its per-round time.
   if (room.mode === EXPLOSIVE_MODE) initExplosiveMatch(room);
 }
 
@@ -245,14 +231,7 @@ function settingHandler(field) {
   };
 }
 
-// Ported from Game/Handlers/Game/Lobby/ChangeMode.cs's Room.Mode assignment
-// - but NOT its payload[2] read. A live capture of a real FFA-switch attempt
-// showed payload[0]=1 (FFA's real Mode enum value) while payload[2] stayed 0
-// (Explosive) - the room silently reverted to Explosive instead of
-// switching. Same flavor as this session's RoomKick/RoomInvite field-offset
-// finds: this client just doesn't put the value where the reference does
-// for this one sub. The other three settingHandler subs aren't touched -
-// no evidence they're wrong, only this one was observed failing live.
+// Lobby/ChangeMode.cs, but the client sends the mode in payload[0], not payload[2] as the reference reads (live capture).
 function handleModeUpdate(room, player, payload) {
   if (player.slot !== room.master || room.state !== 1) return null;
   const mode = Number(payload[2]); // client 22: payload[0] is always 1, the chosen mode is at [2] (live: Explosive sent [1,0,0], FFA [1,0,1])
@@ -291,30 +270,9 @@ function handleGetMission(room, player, payload) {
   return { newType: SUB.START_MISSION, payload: out, selfTarget: true };
 }
 
-// Ported from Modes/FreeForAll.cs's SpawnSlot(): a round-robin index over up
-// to 20 spawn points, one counter shared by the whole room - the first spawn
-// of a round returns 0, every one after increments and wraps. room.spawnPoint
-// is reset (see handleStart) whenever a new round begins, matching
-// Initilize()'s blnFirstSpawn=true. ponytail: no real per-map spawn-point
-// *positions* (no MapManager/map data here) - this only varies which index
-// the client is told, which is what actually stops everyone rendering on
-// top of each other; it's not verified against a real map's actual layout.
-//
-// Neither TDM's nor Explosive's SpawnSlot() is overridden in the
-// reference - both inherit GameMode's own `return 0;`, no round-robin at
-// all (only FreeForAll.cs overrides it). Confirmed dead end after live
-// testing this index exhaustively for TDM across two sessions: a per-team
-// round-robin, a shared round-robin (0,1,2), and a wide deliberate spread
-// (-2, -1, 2, 10) covering sign, parity and magnitude - every single value
-// landed players at the same correct per-team point every time. A same
-// index (1) even reproduced a *different* point across two separate
-// matches, and the payload's other fields (0-6, client-supplied, never
-// decoded - see scheduleAutoRespawn) didn't correlate with that difference
-// either. Whatever picks between a flag's spawn points for TDM isn't
-// reachable through anything this server sends - same class of limit as the
-// boneId/offset-33 mysteries (guide, Fase 11/24): needs a disassembler, not
-// more guessing here. Reverted to the faithful `return 0` for anything but
-// FFA.
+// FreeForAll.cs SpawnSlot(): a round-robin over 20 spawn points per room, reset each round (room.spawnPoint), so FFA
+// players do not all appear on one spot. Other modes return 0 like the reference: in TDM the client picks the point
+// itself, no value sent here changes it (docs/protocol/match.md, Spawn).
 function nextSpawnSlot(room) {
   if (room.mode !== FFA_MODE) return 0;
   room.spawnPoint = room.spawnPoint === undefined ? 0 : (room.spawnPoint + 1) % 20;
@@ -355,24 +313,9 @@ function handleConfirmSpawn() {
   return null;
 }
 
-// Ported from Objects/GameMode.cs's OnDamage/DamagePlayer, simplified.
-// Real per-weapon damage: `item_target_info.power` (DB table, confirmed
-// populated - e.g. DA02=200, DG05=850, DL01=2000) x a weapon-independent
-// hitbox multiplier (DB table `damage_multipliers`: head 1.5, torso 0.75,
-// lower limbs 0.33, sniper-zone 1.5 - GameMode.cs's GetHitBoxMultiplier).
-// Kills/deaths persist to user_details immediately (fire-and-forget, same
-// pattern as checkPremiumExpiry).
-//
-// The reference also applies a distance-falloff tier (Weapon.PowerPersonal,
-// "Low/Middle/High") on top of this, but the 23-field damage payload handled
-// below has no distance/radius field to key it off of - always uses the
-// closest tier (index 0). Confirmed against the full client catalog
-// (Data/items.bin, TARGET_INFO.PERSONAL - guide 17.5): index 0 is 100 for
-// nearly all guns, but not for knives/rockets (DJ/DK, 70-90) or vehicle-
-// mounted weapons (FB/FC/FD, 50-90) - PERSONAL_FALLOFF below holds only the
-// exceptions, everything else defaults to 1 (100%). Upgrade to the full
-// Low/Middle/High tiers if a distance field is ever identified in the
-// payload.
+// GameMode.cs OnDamage/DamagePlayer: item_target_info.power x the hitbox multiplier (damage_multipliers table).
+// No distance field in the payload, so the nearest falloff tier is used: PERSONAL_FALLOFF lists the weapons where it
+// is not 100% (docs/protocol/match.md, Damage).
 const PERSONAL_FALLOFF = {
   DJ01: 0.75, DJ02: 0.9, DJ03: 0.75, DJ04: 0.9, DK01: 0.7, DK02: 0.9,
   DL01: 0.5, DL02: 0, DO01: 0, DO02: 0, DO03: 0, DP02: 0, DQ01: 0, DQ02: 0,
@@ -456,11 +399,7 @@ function handlePlayerDamage(room, player, payload, u, db) {
     return null;
   }
 
-  // boneId (payload[11], = blocks[15]) - sessionId: matches the reference's
-  // Hitbox enum (1237 head, 1239 torso/limbs, 1241 lower limbs, 1243 sniper
-  // bone) - confirmed against real captures (guide Fase 24: 1237/1241 for
-  // "head" hits, 1239 for a "body" hit) and independently against
-  // WarRock-ToXiiC-Core's Damage.cs, which hardcodes the same three numbers.
+  // boneId (payload[11]) - sessionId = the reference's Hitbox enum: 1237 head, 1239 torso, 1241 lower limbs, 1243 sniper.
   const hsCalc = Number(payload[11]) - u.sessionId;
   const headshot = hsCalc === 1237 && !NO_HEADSHOT_WEAPON.test(weapon);
   const basePower = getItem(weapon)?.power || FALLBACK_POWER;
@@ -475,9 +414,7 @@ function handlePlayerDamage(room, player, payload, u, db) {
   out[4] = player.slot; // attacker slot: the kill feed names this one (real captures: slot 0 -> 0, slot 4 -> 4); never the client's word
   out[12] = victim.health;
   out[13] = previousHealth;
-  // shootenPart, the client's headshot hit-marker: offset 17 for the older
-  // clients this server targets (per Damage.cs's own "22 = Nexon - 21/17 =
-  // Older clients" note), not 18 - fixed off-by-one against the reference.
+  // shootenPart (headshot marker) is at offset 17 for these clients, 18 only for the Nexon client (Damage.cs note).
   if (headshot) out[17] = '99.0000';
 
   if (victim.health > 0) return { payload: out };
@@ -520,16 +457,10 @@ function handlePlayerDamage(room, player, payload, u, db) {
       console.error('PlayerDamage: failed to persist headshot:', err.message)
     );
   }
-  // TeamDeathMatch.OnDeath: a normal kill drains the *victim's own team*
-  // ticket pool, not the attacker's. ponytail: unconditional now, not just
-  // TDM - ToXiiC-Core's OnDie() decrements this for every mode (User.cs),
-  // and EndGame.cs sends it as the FFA/TDM "round" fields too (see
-  // roundtimer.js). Hypothesis for the FFA win/lose mystery, needs retest.
+  // A kill drains the victim's team tickets, in every mode: ToXiiC's OnDie() does, and EndGame sends them for FFA too.
   room.tickets[victim.team] -= 1;
 
-  // Ported from OnDeath's trigger point in FreeForAll (checked right where a
-  // kill lands, not just on the tick loop - room.js's roundtimer only ticks
-  // once a second, that's too coarse for "you just won").
+  // Win check right on the kill, as FreeForAll.OnDeath does: the once-a-second round timer is too late.
   if (checkWinCondition(room)) {
     endRound(room, db);
     sendRoomUpdateToLobby(room, true);
@@ -537,32 +468,13 @@ function handlePlayerDamage(room, player, payload, u, db) {
   return { newType: SUB.PLAYER_DEATH, payload: out };
 }
 
-// Unlike ConfirmSpawn, there is no Handlers/Game/Ingame/ConfirmDeath.cs at
-// all in the reference - the opcode exists in GameSubs.cs but was never
-// wired to anything, same "name is real, behavior isn't" gap already seen
-// for clan/GM commands (Fase 14/15). Originally treated as fire-and-forget
-// by analogy with ConfirmSpawn - real capture disagreed: without an echoed
-// reply, the client waited a few seconds after confirming its own death and
-// then quietly left the room on its own, never having requested a respawn.
-// Every other implemented GameSub acks the client's own action before it
-// moves on (READY, WeaponSwitch, BackToLobby...) - this is that same
-// pattern, designed from scratch since the reference has nothing to port.
+// No ConfirmDeath handler in the reference, but the client must get the echo or it leaves the room a few seconds later.
 function handleConfirmDeath(room, player, payload) {
   scheduleAutoRespawn(room, player);
   return { payload, selfTarget: true };
 }
 
-// Safety net, not a ported behavior - but the original 5000ms threshold was
-// a misdiagnosis: a live test (3 real TDM deaths, no override active) showed
-// the client sending its own explicit Spawn every single time, spontaneously,
-// ~19s after ConfirmDeath (18.9s/19.4s/19.5s across the three) - not "stuck",
-// just slower than we assumed. The 5s timer was firing on *every* death,
-// silently replacing the client's own correct, fresh, real spawn-point choice
-// with a stale one frozen from the match's first spawn - this is what made
-// the TDM spawn-point investigation look unsolvable for so long (see
-// nextSpawnSlot's comment and gm.js's /spawnfields/spawncycle): we were never
-// actually observing the real client's behavior. 25s gives a safety margin
-// above the observed ~19s without still routinely cutting the client off.
+// Safety net: the client asks to respawn ~19 s after its death (live); 25 s leaves it room to do so itself.
 const AUTO_RESPAWN_MS = 25000;
 
 function clearAutoRespawn(player) {
@@ -584,17 +496,8 @@ function scheduleAutoRespawn(room, player) {
 
     player.health = 1000;
     player.alive = true;
-    // TDM never sends an explicit Spawn request after the first one of the
-    // match in practice - every respawn observed live went through this
-    // timer instead (see nextSpawnSlot's comment for the now-closed
-    // spawn-point index investigation this timer was also used for).
     const slot = nextSpawnSlot(room);
-    // Reuse the client's own last real Spawn payload as the base instead of
-    // an all-zero one: whatever lives in fields 0-6 (never decoded - team
-    // and/or class selection, going by the symptom this fixed) is something
-    // the client picked, not something we can safely default to 0 - a
-    // synthetic all-zero payload was observed spawning team 1 players at
-    // team 0's flag every time this timer fired.
+    // The client's own last Spawn payload: fields 0-6 are not decoded, and zeros spawned team 1 at team 0's flag.
     const payload = player.lastSpawnPayload ? [...player.lastSpawnPayload] : padded([], 10);
     payload[7] = slot;
     payload[8] = slot;
