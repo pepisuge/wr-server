@@ -28,7 +28,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-    restart: on-failure
+    restart: unless-stopped
 
   auth:
     build:
@@ -49,7 +49,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-    restart: on-failure
+    restart: unless-stopped
 
   game:
     build:
@@ -78,7 +78,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-    restart: on-failure
+    restart: unless-stopped
 
 volumes:
   db_data:

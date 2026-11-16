@@ -45,6 +45,10 @@ Without Docker: load `WarRock-Chapter-1-Server/Databases/*.SQL` (`git submodule 
 
 With Docker (from the repo root, after `git submodule update --init` and `cp docker/.env.example docker/.env`):
 `docker compose -f docker/docker-compose.yml up -d --build`. Set `SERVER_IP` in `docker/.env` for LAN clients.
+
+Keeping it up: Docker restarts a crashed container and starts the stack again after a reboot (`restart: unless-stopped`); `docker ps` shows `unhealthy` when a port stops answering (Docker does not restart those by itself).
+On bare metal run each server under the supervisor, which restarts it when it exits and kills + restarts it when its port stops answering for 3 checks (30 s apart):
+`node tools/supervise.js auth-server.js 5330` and `node tools/supervise.js game-server.js 5340` (from `node/`). To start them at boot on Windows, add both commands to a Task Scheduler task "At startup".
 Protocol reference: [`docs/protocol`](docs/protocol/index.md), also published at <https://pepisuge.github.io/wr-server/>.
 
 ### Configuration
