@@ -36,13 +36,8 @@ function scoreboardValues(room) {
   return [maxKills(room), leaderKills(room)];
 }
 
-// Ported (loosely) from Room.Process() + Packets/GameTick.cs. The reference
-// runs a real per-room thread driving round timers, win conditions, vehicle
-// respawns, and damage/kill scoring. ScoreboardA/B used to be hardcoded 0
-// here - that's the "000" a player saw in the kill-target HUD instead of
-// the room's actual setting. For TDM, ScoreboardA/B are the two teams'
-// remaining ticket pools (TeamDeathMatch.ScoreboardA/B) instead of FFA's
-// target-kills/leader-kills.
+// Room.Process() + Packets/GameTick.cs, loosely. ScoreboardA/B: FFA target kills / leader kills, TDM the two teams'
+// remaining tickets.
 function startRoundTimer(room, db) {
   // Clan war: who was there at the start decides whether the result counts (see settleWar).
   if (room.isClanWar > 0) room.warTeams = [0, 1].map((t) => [...room.players.values()].filter((p) => p.team === t).length);
@@ -117,18 +112,8 @@ function checkWinCondition(room) {
 // needs objective-based modes - flags, bomb plants - none of which exist
 // here yet).
 //
-// ponytail/bug found: the reference's real field order is
-// [OK, CurrentRoundTeamA, CurrentRoundTeamB, killsDerb, deathsDerb, killsNIU,
-// deathsNIU, 0, 0, playerCount, ...] (Packets/EndGame.cs) - CurrentRoundTeamA/B
-// come right after OK, not after the kill/death totals. This file had them
-// swapped: team round fields were sent in the trailing 0,0 slot while
-// position 1-2 (what CurrentRoundTeamA/B actually is) stayed hardcoded at
-// 0,0. Two live experiments (guide Fase 25 for FFA, and this session for
-// Explosive, both directions) "disproved" changing the value at the *wrong*
-// position - the client was always reading a fixed 0,0 for the field it
-// actually uses, so of course nothing changed. Not yet re-tested live with
-// the field order fixed - do that before declaring the win/lose mystery
-// solved either way.
+// Field order (Packets/EndGame.cs): [OK, CurrentRoundTeamA, CurrentRoundTeamB, killsDerb, deathsDerb, killsNIU,
+// deathsNIU, 0, 0, playerCount, ...].
 function endRound(room, db) {
   stopRoundTimer(room);
   room.state = 1; // Waiting
@@ -141,12 +126,7 @@ function endRound(room, db) {
     teamDeaths[p.team] = (teamDeaths[p.team] || 0) + p.deaths;
   }
 
-  // CurrentRoundTeamA/B (guide Fase 24/25's "round" fields): Explosive has
-  // real per-round win counts (teamRounds). Other modes: ponytail hypothesis,
-  // not a confirmed port - ToXiiC-Core's EndGame.cs sends
-  // KillsDerbaranLeft/KillsNIULeft (our room.tickets) here instead of a
-  // hardcoded 0/0, for every non-Explosive mode including FFA. Needs live
-  // retest now that it's in the right packet position.
+  // CurrentRoundTeamA/B: Explosive's round wins; other modes the tickets left, as ToXiiC-Core's EndGame.cs sends.
   if (room.isClanWar > 0) settleWar(room, db, players, teamKills);
 
   const roundFields =

@@ -1,6 +1,5 @@
-// Fase 5 (livelli/XP) + Fase 6 (premium), ported from Core/LevelCalculator.cs,
-// Game/Enums/Premium.cs, Game/Entities/{User,Player}.cs and the `gameconfig`
-// table. Kept in one module since the XP formula is premium-rate-dependent.
+// Levels/XP and premium, from Core/LevelCalculator.cs, Game/Enums/Premium.cs, Game/Entities/{User,Player}.cs and the
+// `gameconfig` table: one module because the XP formula depends on the premium rate.
 const { ownsItem } = require('./inventory');
 
 // EXPTable from Core/LevelCalculator.cs, verbatim (index = level-1, last
@@ -56,10 +55,8 @@ function premiumXpBonus(premium) {
   return PREMIUM_XP_BONUS[premium] ?? 0;
 }
 
-// gameconfig table - loaded once at boot (Game/GameConfig.cs's pattern),
-// mutated in place so callers holding a reference see updates. bombTime/
-// explosiveRoundTime/allowStartAlone are Explosive mode's (Fase 27) -
-// GameConfig.cs's own defaults if the DB row is somehow missing them.
+// gameconfig, loaded once at boot and mutated in place so holders of this object see updates; GameConfig.cs's
+// defaults when the row lacks a value.
 const GameConfig = {
   expRate: 1,
   dinarRate: 1,
