@@ -24,7 +24,7 @@ function logPacket(label, pkt) {
 }
 
 // Highest sql/ patch this code needs (sql/12 records them in wres2.schema_version). Bump with every new patch.
-const SCHEMA_VERSION = 14;
+const SCHEMA_VERSION = 16;
 async function checkSchema(db) {
   const [rows] = await db.query('SELECT MAX(version) AS v FROM schema_version').catch(() => [[{ v: null }]]);
   const v = rows[0].v;
