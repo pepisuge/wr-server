@@ -48,14 +48,14 @@ Clan war rooms: the client downloads `http://ops.warrock.net/ClanAvatar.aspx?Cla
 
 ## Clan war (self-designed)
 
-Declared from the website (master or officer, online in a lobby) or `START_WAR`. Team modes only: switching a war room to FFA is ignored (clanmates would shoot each other). Results (#11): `roundtimer.js` `settleWar` at match end, winner by rounds (Explosive), tickets (TDM) or kills, equal = draw; it counts only if both clans had players when the match started, and a side gone by the end loses. Stored in `clan.wins/draws/losses`; points (`exp`) = win 1000, draw 500, loss 250, used by `CLAN_RANKING` and the site ranking.
+Declared from the website or `START_WAR` (master or officer) as a challenge: a master or officer of the other clan has 10 minutes to accept or decline it on the website (declaring back on the challenger also accepts). The accepting player must be online in a lobby: the war room is created for them, their clan is team 0. `START_WAR` replies `[1, roomId]` when it accepted, `[1, -1]` when it sent a challenge, `[0]` on error. Challenges are kept in memory only. Team modes only: switching a war room to FFA is ignored (clanmates would shoot each other). Results (#11): `roundtimer.js` `settleWar` at match end, winner by rounds (Explosive), tickets (TDM) or kills, equal = draw; it counts only if both clans had players when the match started, and a side gone by the end loses. Stored in `clan.wins/draws/losses`; points (`exp`) = win 1000, draw 500, loss 250, used by `CLAN_RANKING` and the site ranking.
 
 Ranks: an officer can accept/refuse applicants and kick plain members; promoting/demoting officers, kicking an officer and handing over master are the master's.
 
 Emblems: `clan.emblem` (`sql/10`) = NULL (gallery emblem picked from the name), `g<n>` (one of 24 generated, `game/emblems.js`; the client ships none) or `u` (uploaded PNG/JPEG/BMP in `emblem_data`, max 64 KB and 256 px).
 
 
-`isClanWar`/`Clan1`/`Clan2` exist in the room packets (`-1` = no), but neither reference shows how a real client starts a war. Here a master declares war on another clan by id (`START_WAR = 1000`): the server creates a room with `isClanWar=1` and assigns teams by clan (challenger team 0, challenged team 1); the other clan gets a chat notice. Manual team changes are ignored. 
+`isClanWar`/`Clan1`/`Clan2` exist in the room packets (`-1` = no), but neither reference shows how a real client starts a war. Here a master declares war on another clan by id (`START_WAR = 1000`): once the other clan accepts, the server creates a room with `isClanWar=1` and assigns teams by clan (accepting clan team 0, challenger team 1); both clans get a chat notice. Manual team changes are ignored. 
 
 ## Status
 

@@ -228,7 +228,12 @@ async function clanPage(res, db, s, notice) {
         .join('')}</table>`
       : `<p class="muted">No applications. Players apply from their own Clan page (or in game); they show up here to accept or refuse.${isMaster ? ' Members get buttons in the list above: Officer/Demote, Kick, Make master.' : ' Officers can kick members; ranks are up to the master.'}</p>`}</div>`;
     const rivals = [...clan.clans.values()].filter((x) => x.id !== c.id);
-    body += `<div class="box"><h1>Clan war</h1><p class="muted">Be in a game lobby (not in a room), then declare: a war room is created for you in your channel and both clans get a notice. Each clan plays on its own side.</p>
+    const incoming = clan.warChallengesTo(c.id);
+    const clanField = (x) => `<input type="hidden" name="clan" value="${x.id}">`;
+    body += `<div class="box"><h1>Clan war</h1><p class="muted">Declare war to challenge a clan: one of its masters or officers has 10 minutes to accept or decline it here. Whoever accepts must be in a game lobby (not in a room): the war room is created for them in their channel and both clans get a notice. Each clan plays on its own side.</p>
+${incoming.length ? `<table><tr><th>Challenged by</th><th>W/D/L</th><th></th></tr>${incoming
+      .map((x) => `<tr><td>${emblemImg(x)} ${esc(x.name)}</td><td>${x.wins}/${x.draws}/${x.losses}</td><td>${act(s, 'waraccept', 'Accept', clanField(x)) + act(s, 'wardecline', 'Decline', clanField(x), 'danger')}</td></tr>`)
+      .join('')}</table>` : ''}
 <table><tr><th>Clan</th><th>W/D/L</th><th></th></tr>${rivals
       .map((x) => `<tr><td>${emblemImg(x)} ${esc(x.name)}</td><td>${x.wins}/${x.draws}/${x.losses}</td><td>${act(s, 'war', 'Declare war', `<input type="hidden" name="clan" value="${x.id}">`, 'danger')}</td></tr>`)
       .join('') || '<tr><td colspan="3" class="muted">No other clans yet.</td></tr>'}</table></div>`;
@@ -264,6 +269,8 @@ async function clanAction(req, res, db, s) {
     kick: () => clan.rankAction(db, u, 2, target),
     master: () => clan.promote(db, u, target),
     war: () => clan.declareWar(u, Number(b.get('clan'))).error,
+    waraccept: () => clan.acceptWar(u, Number(b.get('clan'))).error,
+    wardecline: () => clan.declineWar(u, Number(b.get('clan'))).error,
     emblem: () => {
       const e = b.get('emblem') || '';
       return /^g\d+$/.test(e) && Number(e.slice(1)) < emblems.GALLERY_SIZE ? clan.setEmblem(db, u, e) : 'Pick an emblem.';
