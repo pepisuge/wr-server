@@ -93,7 +93,7 @@ Uses counter: `0` exhausted, `-1` unlimited, positive decrements. `user_coupons`
 
 GM rights come from `user_details.is_gm`, set directly in the DB; nothing the client sends affects it (its `AccessLevel` field is ignored).
 
-A command is a normal `CHAT` packet starting with `/`, intercepted before broadcast for GMs only. Replies are whispers from `GM` with `GM>> ` on every line. Targets: by display name if online, else by account id. `/help` is taken by the client, hence `/gmhelp`.
+A command is a normal `CHAT` packet starting with `/`, intercepted before broadcast for GMs only. Replies are whispers from `GM` with `GM>> ` on every line, at most 50 characters each (`MAX_CHAT_LINE`): found live, a `WHISPER` needs the recipient's own sessionId/name in the target fields to render (`Notice1`/`Notice2` with blank fields did not), a line without its own `>>` marker renders only its last bracketed token, and one 575-character reply rendered as `1`. Lists (`/gmhelp`, `/maps`) are packed by whole items so no entry is split across lines. Targets: by display name if online, else by account id. `/help` is taken by the client, hence `/gmhelp`.
 
 Ported from ToXiiC Core:
 

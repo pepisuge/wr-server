@@ -1,10 +1,5 @@
-// GM command system, invoked from chat.js: a message starting with "/" from
-// an account with user_details.is_gm=1 is intercepted here instead of being
-// broadcast as normal chat. is_gm lives in the game DB (loaded at
-// authorization time, see handlers.js/progression.js) rather than trusting
-// any client-supplied field - the client's own Authorization packet carries
-// an AccessLevel byte, but nothing here validates it, so it can't be used
-// to grant GM powers safely.
+// GM commands, from chat.js: a "/" message from an account with user_details.is_gm=1 (loaded from the DB at
+// authorization; the client's own AccessLevel field is never trusted).
 const { users, getChannel } = require('./state');
 const { xpForLevel, levelForXp } = require('./progression');
 const { handleRoomSpectate, removeFromRoom, notifyLobbyAfterLeave, setMaster, ROOM_LEAVE, ROOM_KICK } = require('./rooms');
@@ -12,48 +7,20 @@ const { endRound } = require('./roundtimer');
 const { getMap } = require('./maps');
 const { grantItem } = require('./shop');
 
-// Bans/unbans live on the AUTH db (masterserver.users.status, the same
-// column auth/handlers.js already checks at login - status<=0 blocks entry)
-// which the game process doesn't otherwise connect to. Set once at boot from
-// game-server.js instead of threading a second `db` param through
-// handlers.js/chat.js/handleGmCommand for the sake of two commands - same
-// "module-level singleton" shape state.js's users/channels Maps already use.
+// Bans and renames live in the login DB (masterserver): game-server.js hands this module that pool once at boot.
 let authDb = null;
 function setAuthDb(pool) {
   authDb = pool;
 }
 
 const CHAT = 0x7400;
-// Game/Enums/ChatType.cs - Notice1/Notice2 are what Cristina (the reference's
-// virtual assistant) uses to talk to a player. An earlier WHISPER attempt
-// left the target sessionId/name fields blank (0/'NULL') and never rendered;
-// a real whisper-to-you packet always carries the *recipient's own*
-// sessionId/displayname in those fields (see chat.js's TYPE.WHISPER target
-// send), so that's the likely reason. Switched to WHISPER with those fields
-// filled in - it's the only type that shows up as a normal chat line instead
-// of a popup/notice.
+// Replies are whispers to the GM themself: the only type that renders as a plain chat line (docs/protocol/economy.md).
 const WHISPER = 6;
 
-// A real client capped its own typed chat input at 55 chars (live capture:
-// "ahaha...x", 55 chars after the ">>" the client itself prepends) - and a
-// single 575-char /gmhelp reply rendered as just "1" instead of the actual
-// text, both pointing the same way even though they're different mechanisms
-// (send-side maxlength vs. whatever breaks on receive). Any reply longer
-// than a real chat line has ever been observed to be must go out as several
-// normal-length lines instead of one giant packet. 50 is a conservative
-// margin under the one confirmed-working 55-char data point - tighten once
-// a live test finds the exact receive-side boundary.
+// Longer replies go out as several lines: the client's input box takes 55 chars and a long packet renders as "1".
 const MAX_CHAT_LINE = 50;
 
-// Greedy word-wrap, never splits a word - matches how a player would have
-// typed it across multiple lines by hand. Fine for free-form text (a single
-// sentence), but for a LIST of independent items (each command in /gmhelp,
-// each map in /maps) it only guarantees whole *words* survive, not whole
-// *items* - a two-word map name like "Rusty Nails" or a multi-token command
-// usage like "/setpremium <player|id> <tier 0-4> <days>" can still get
-// cut in half between two lines, which is exactly what made /gmhelp's output
-// hard to read once it stopped being one giant unreadable packet (Fase 38)
-// and became several oddly-cut ones instead. Use packItems below for lists.
+// Greedy word-wrap for free text. Lists use packItems, which never splits an item across lines.
 function wrapLines(text, max) {
   const words = text.split(' ');
   const lines = [];
@@ -71,10 +38,7 @@ function wrapLines(text, max) {
   return lines;
 }
 
-// Greedy-packs whole ITEMS (never splits one) into lines up to max chars,
-// joined by sep - each line boundary always falls between two complete
-// items, so a reader can always tell where one command/map/etc. ends and
-// the next begins, unlike wrapLines' word-level wrap above.
+// Packs whole items (commands, maps) into lines up to max chars, joined by sep.
 function packItems(items, max, sep = ' | ') {
   const lines = [];
   let cur = '';
@@ -91,16 +55,7 @@ function packItems(items, max, sep = ' | ') {
   return lines;
 }
 
-// Tried "GM>> " only on the first line, to save characters (every other
-// line bare). Live test against the real client: line 1 rendered fully, but
-// every bare continuation line rendered as only its LAST bracketed token
-// ("/addmoney <player|id> <amount>" showed as just "<player|id>") -
-// not a length problem, a missing-marker one. Same lesson Fase 36 already
-// found for Notice1 (no ">>" marker -> broken/empty render), just for
-// WHISPER too: every line apparently needs its own ">>" to render its text
-// at all, not just the first. Costs a few chars per line but that's still
-// well inside the MAX_CHAT_LINE budget (measured live: "GM>> " + 41 chars of
-// content rendered fine in one line).
+// Every line needs its own "GM>> ": a line without the ">>" marker renders only its last bracketed token.
 function replyLines(socket, lines) {
   const u = socket.user;
   lines.forEach((line) => {
@@ -112,12 +67,7 @@ function reply(socket, text) {
   replyLines(socket, wrapLines(text, MAX_CHAT_LINE));
 }
 
-// Level/money changes only show up in the client's own UI from data it
-// received at login (Authorization packet) - there's no live-refresh packet
-// for this in the reference. Closest a player can get to seeing the change
-// immediately is reconnecting, so whichever online session actually got
-// mutated is warned and then dropped - forcing the relogin instead of
-// leaving them to notice nothing changed.
+// The client shows level/money only from the login data, so a changed online player is warned and disconnected.
 const RECONNECT_DELAY_MS = 5000;
 function scheduleReconnect(targetUser, callerSocket) {
   const seconds = RECONNECT_DELAY_MS / 1000;
@@ -129,10 +79,7 @@ function scheduleReconnect(targetUser, callerSocket) {
   setTimeout(() => targetUser.socket.end(), RECONNECT_DELAY_MS);
 }
 
-// By online displayname first (case-insensitive - "wruser" should find
-// "WRUser", the real client's actual casing), otherwise the argument is
-// treated as a raw account id - works offline too, without needing a
-// cross-database lookup for a nickname (see the plan).
+// Online display name first (case-insensitive), else a raw account id: works for offline players too.
 function resolveTarget(arg) {
   const needle = String(arg || '').toLowerCase();
   const byName = [...users.values()].find((u) => u.displayname.toLowerCase() === needle);
@@ -140,10 +87,7 @@ function resolveTarget(arg) {
 
   const id = Number(arg);
   if (!Number.isInteger(id) || id <= 0) return null;
-  // Also match by id among online users - otherwise targeting a connected
-  // player by their numeric id (instead of name) would silently take the
-  // "offline" DB-only path, leaving their live in-memory xp/money stale
-  // until next login and overwriting this update on their next save.
+  // An online player targeted by id must take the online path, or their in-memory xp/money would overwrite this.
   const byId = [...users.values()].find((u) => u.id === id);
   return { online: byId || null, id };
 }
@@ -217,12 +161,7 @@ async function cmdSetPremium(socket, db, args) {
   ]);
   if (result.affectedRows === 0) return reply(socket, `No account with id ${target.id}.`);
 
-  // No scheduleReconnect here unlike setlevel/addmoney: premium's live
-  // effects (room-roster badge, XP bonus math) already read u.premium
-  // directly, no stale-until-relogin field involved - only the 5th-slot
-  // SlotState needs a fresh Authorization packet to show it, the same minor
-  // known gap as level/money, not worth a forced kick. Consistent with
-  // expiry itself being notify-only (see checkPremiumExpiry/ping.js).
+  // No reconnect: premium effects read u.premium live; only the 5th slot waits for the next login.
   const label = target.online ? target.online.displayname : target.id;
   reply(socket, `Premium of ${label} set to tier ${tier} for ${days > 0 ? `${days} days` : 'no expiry'}.`);
 }
@@ -234,10 +173,7 @@ function cmdNotice(socket, db, args) {
   require('./chat').sendNotice(text); // lazy: chat.js requires this module
 }
 
-// Ported from ToXiiC-Core's "kick" - a full disconnect. Cleanup (room
-// removal, lobby notification, users Map deletion) already happens in the
-// socket 'close' handler (handlers.js), same as any other disconnect - no
-// special-casing needed here.
+// ToXiiC-Core's "kick": a full disconnect; the socket 'close' handler does the usual cleanup.
 function cmdKick(socket, db, args) {
   const target = resolveTarget(args[0]);
   if (!target?.online) return reply(socket, 'Usage: /kick <online player>');
@@ -246,16 +182,8 @@ function cmdKick(socket, db, args) {
   reply(socket, `${target.online.displayname} disconnected.`);
 }
 
-// Ported from ToXiiC-Core's "kickr" - removes the target from their current
-// room only, not a full disconnect. Exposed as /kickroom, not /kickr: the
-// user found the original abbreviation unclear next to plain /kick without
-// a description, and a chat command list has no room for descriptions
-// without blowing past the per-line budget Fase 38 just fixed - a
-// self-explanatory name is the cheaper fix. Reuses the exact wire behavior
-// already fixed for the host-kick crash bug: notify only,
-// let the target's own follow-up RoomLeave do the real removal - calling
-// removeFromRoom directly here would race ahead of it the same way that bug
-// did.
+// ToXiiC-Core's "kickr" (named /kickroom to be self-explanatory): sends the kick only and lets the target's own
+// RoomLeave remove them, as the host kick does; removing them here races that leave and crashed the client.
 function cmdKickRoom(socket, db, args) {
   const target = resolveTarget(args[0]);
   if (!target?.online || target.online.roomId === null) {
@@ -289,12 +217,7 @@ async function cmdUnmute(socket, db, args) {
   reply(socket, `${target.online ? target.online.displayname : target.id} is no longer muted.`);
 }
 
-// Ban/unban reuse the SAME column auth/handlers.js already checks at login
-// (users.status<=0 -> ERROR_CODES.banned) - the exact pattern Chapter-1-Server
-// uses too (status doubles as ban flag). Permanent only, no expiry timer
-// (ToXiiC-Core's /ban has one; skipped here, add if a temp ban is ever
-// actually needed). Lives on the AUTH db, not the game db `db` param - see
-// setAuthDb at the top of this file for why.
+// Permanent ban = users.status 0, the column auth/handlers.js checks at login (as in Chapter-1-Server).
 async function cmdBan(socket, db, args) {
   if (!authDb) return reply(socket, 'Ban unavailable: auth DB not connected.');
   const target = resolveTarget(args[0]);
@@ -352,9 +275,7 @@ function cmdStrikes(socket, db, args) {
   ]);
 }
 
-// /giveitem, /giveroom: reuse shop.js's own grantItem(db, u, code, days) -
-// the exact same INSERT a real item-shop purchase makes, so the target's
-// next Authorization packet already reflects it, no bespoke insert here.
+// /giveitem, /giveroom: the same grant as a shop purchase (shop.js grantItem).
 async function cmdGiveItem(socket, db, args) {
   const target = resolveTarget(args[0]);
   const code = (args[1] || '').toUpperCase();
@@ -422,15 +343,8 @@ function cmdRoomInfo(socket, db, args) {
   );
 }
 
-// Ported from ToXiiC-Core's "rdis" - force-closes a room, everyone back to
-// lobby. Exposed as /closeroom, not /rdis - same discoverability reason as
-// /kickroom above, "rdis" gives no hint at all of what it does.
-// Reuses removeFromRoom per player (same function the real RoomLeave
-// handler calls) so master reassignment/round-timer teardown/roster
-// broadcasts all happen exactly like a normal mass-leave, then sends each
-// removed player their own ROOM_LEAVE reply (removeFromRoom itself only
-// notifies the *other* room members, same split rooms.js's own
-// handleRoomLeave already relies on) and a single lobby update at the end.
+// ToXiiC-Core's "rdis" (named /closeroom): the normal leave path for each player (master handover, timers), then
+// each one's own ROOM_LEAVE reply, which removeFromRoom does not send, and one lobby update.
 async function cmdForceCloseRoom(socket, db, args) {
   const u = socket.user;
   const roomId = Number(args[0]);
@@ -492,11 +406,8 @@ function cmdEndGame(socket, db, args) {
   reply(socket, 'Match ended.');
 }
 
-// Ported from ToXiiC-Core's "extendtime" - adds minutes to the room's
-// running countdown (room.downTick, roundtimer.js). No-op for Explosive
-// rooms: their round timing is driven by tickExplosive's own state machine,
-// not downTick (see roundtimer.js) - flagged in the reply rather than
-// silently doing nothing.
+// ToXiiC-Core's "extendtime": adds minutes to room.downTick. Explosive rooms time their rounds themselves, so the
+// reply says so instead of doing nothing silently.
 function cmdExtendTime(socket, db, args) {
   const u = socket.user;
   const minutes = Number(args[0]);
@@ -523,13 +434,7 @@ function cmdWarn(socket, db, args) {
   reply(socket, `Warning sent to ${target.online.displayname}.`);
 }
 
-// Named /gmhelp, not /help - the client itself intercepts "/help" locally
-// (shows its own built-in command list, never reaches the server as chat).
-// One array entry per command - packItems below only ever joins WHOLE
-// entries onto a line, so a multi-token usage like "/setpremium <player|id>
-// <tier 0-4> <days>" can never be cut in half across two chat lines the
-// way wrapLines' word-level wrap could (Fase 38's fix helped readability but
-// didn't fully solve it - see packItems' own comment above).
+// /gmhelp: the client keeps "/help" for itself. One entry per command so packItems never splits a usage line.
 const HELP_COMMANDS = [
   '/setlevel <player|id> <level 1-100>',
   '/addmoney <player|id> <amount>',
@@ -597,10 +502,7 @@ function handleGmCommand(socket, db, text) {
   const cmd = COMMANDS[(name || '').toLowerCase()];
   if (!cmd) return reply(socket, `Unknown command: ${name || ''}. Use /gmhelp.`);
 
-  // Guard once here, not per-command: an unexpected error (bad DB input,
-  // etc.) must never crash the whole process over one chat message - it did
-  // exactly that the first time (an unsigned-arithmetic underflow in
-  // cmdAddMoney) before this existed.
+  // One guard for every command: an unexpected error (bad DB input...) must not crash the process over a chat line.
   Promise.resolve(cmd(socket, db, args)).catch((err) => {
     console.error('GM command failed:', err.message);
     reply(socket, `Command failed: ${err.message}`);
