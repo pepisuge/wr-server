@@ -29,6 +29,7 @@ Private WarRock server in plain Node.js (CommonJS). Entry points: `node/auth-ser
 - Branch from `main`, open a PR, let CI pass; never push to `main` directly. One topic per PR.
 - With the GitHub CLI: `gh issue list`, `gh pr create --fill`, `gh pr checks --watch`, `gh run view --log-failed`.
 - A change verified only by tests, not against the real client, says so in the PR (`needs live test`).
+- Add a line under `## Unreleased` in `CHANGELOG.md` with every PR worth telling operators (new `sql/` patch first). A release renames that section to `## vX.Y.Z (date)` and tags the merge commit `vX.Y.Z` (`gh release create vX.Y.Z --notes-from-tag` or the section as notes).
 
 ## Run
 MariaDB on 127.0.0.1:3306 with `masterserver` and `wres2` (upstream dumps + `sql/03`…`14`), then `cd node && node auth-server.js` and `node game-server.js`.
