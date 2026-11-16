@@ -1,11 +1,5 @@
-// Ported from Modes/Explosive.cs - CQC's default mode: short rounds, each
-// with a bomb plant/defuse objective, played until one team reaches
-// GameConfig.RoundLimits[room.setting] round wins. Chosen with the user as
-// a full-fidelity port, including StartRound/EndRound's own undocumented
-// magic constants (coordinate-looking triples, six repeated "0.0000"
-// strings, a fixed "DS05") - nobody, not even the original project,
-// explained these; they're copied verbatim, same as GetMission's magic
-// numbers (Fase 9) were, and corrected once real capture shows what's wrong.
+// Modes/Explosive.cs: rounds with a bomb plant/defuse objective until one team has GameConfig.RoundLimits[setting]
+// round wins. StartRound/EndRound's undocumented constants are copied verbatim from the reference.
 const { broadcastPacket } = require('../lib/xor-socket');
 const { XOR } = require('../lib/constants');
 const { getChannel, roomSockets } = require('./state');
@@ -40,13 +34,8 @@ function initExplosiveMatch(room) {
   room.roundActive = true;
 }
 
-// Ported from PrepareRound(). The 5s real-time gate and the "everyone acked
-// RoundEndConfirm" gate both trivially pass on the very first call (fresh
-// state) - `first` only matters for skipping the round counter and the
-// Mission/StartRound broadcasts, since there's nothing to announce yet (the
-// match-start flow, Fase 9, already told the client play has begun).
-// Returns true (round started), false (still waiting), or 'match-end' (one
-// side had nobody left between rounds - caller ends the whole match).
+// PrepareRound(): on the first call both gates pass and nothing is announced (the match start already did).
+// Returns true (round started), false (still waiting) or 'match-end' (one side left between rounds).
 function prepareRound(room, first) {
   if (Date.now() - room.roundEndAt < 5000) return false;
 
@@ -55,10 +44,7 @@ function prepareRound(room, first) {
 
   if (![...room.players.values()].every((p) => !p.roundWait)) return false;
 
-  // Entities/Player.cs's RoundStart(): Health=1000. Confirmed NOT an
-  // Explosive-only override (was assumed so here until a live test with
-  // real per-weapon damage exposed near-one-shot pistol kills) - both
-  // references set 1000 as the universal baseline for every mode.
+  // Player.cs RoundStart(): 1000 health, the baseline of every mode.
   for (const p of room.players.values()) {
     p.health = 1000;
     p.alive = true;
@@ -79,13 +65,8 @@ function prepareRound(room, first) {
   return true;
 }
 
-// Ported from Packets/Mission.cs - reuses the same StartMission GameSub
-// (403) the existing GetMission flow already answers on request (Fase 9),
-// pushed to the whole room instead of only the asker. ponytail: one field
-// (payload position 3) differed from GetMission's in the one real capture
-// available (363 vs 500) - not understood well enough to know which is
-// right for a round-start push, kept at 500 for consistency with the
-// already-working GetMission response until a real capture says otherwise.
+// Packets/Mission.cs: the StartMission GameSub (403) pushed to the whole room. ponytail: field 3 is 500 like
+// GetMission; one capture had 363 there, meaning unknown.
 function broadcastMission(room) {
   const fields = [1, -1, room.id, 2, SUB_START_MISSION, 0, 1, 3, 500, 0, 1, 0, 0, 0, 0];
   broadcastPacket(roomSockets(room), XOR.external, GAME_PACKET, fields);
@@ -106,18 +87,7 @@ function broadcastStartRound(room) {
   broadcastPacket(roomSockets(room), XOR.external, GAME_PACKET, fields);
 }
 
-// Ported from EndRound() + Packets/EndRound.cs - the per-ROUND result
-// (distinct from the whole-MATCH EndGame in roundtimer.js, only sent once
-// room.teamRounds[winner] reaches room.roundLimit). Field order verified
-// against the reference field-by-field - already correct.
-//
-// A live test inverting `winner`/teamRounds here made no difference to the
-// client's win/lose banner - but that's inconclusive on its own: this is
-// only the mid-match "round over" popup, not necessarily the results screen
-// that shows Win/Lose. roundtimer.js's EndGame packet had a real field-order
-// bug (CurrentRoundTeamA/B in the wrong slot) which better explains the
-// earlier failed experiments - fix that first and retest live before
-// concluding anything about this packet specifically.
+// EndRound() + Packets/EndRound.cs: the per-round result popup; the whole-match EndGame is in roundtimer.js.
 function broadcastEndRound(room, winner) {
   const fields = [
     1, -1, room.id, 1, SUB_END_ROUND,
@@ -175,10 +145,7 @@ function tickExplosive(room) {
       ? 1
       : 0;
 
-  // ponytail: was checking teamRounds[winner] < roundLimit BEFORE the
-  // increment inside endExplosiveRound - required 2 round wins to end a
-  // roundLimit=1 match. ToXiiC-Core's prepareRound() increments first, then
-  // compares with >= - same fix here.
+  // Increment first, then compare with >=, as ToXiiC-Core's prepareRound() does.
   endExplosiveRound(room, winner);
   if (room.teamRounds[winner] >= room.roundLimit) return { matchEnd: true, winner };
   return null;
