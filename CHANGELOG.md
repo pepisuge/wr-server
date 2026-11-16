@@ -29,3 +29,5 @@ First tagged release: everything up to here.
 
 ### Operations
 - `LOG_LEVEL` (#30), graceful shutdown (#31), `WR_PATCH_VERSIONS` (#47), tests for rooms and shop in CI (#48).
+- Supervisor `node tools/supervise.js` restarts a server that exits or stops answering; Docker `restart: unless-stopped` (#67).
+- Code comments trimmed to the why; findings moved to `docs/protocol/` (#70-#74).
