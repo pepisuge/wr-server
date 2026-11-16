@@ -156,6 +156,8 @@ function createHandlers(db) {
       upgradeToScrypt(db, user.id, password).catch((err) => console.error('login: password hash upgrade failed:', err.message));
     }
     if (await isBanned(db, user)) return sendLoginError(socket, ERROR_CODES.banned);
+    // referral.js: no reward between accounts that share an IP
+    db.query('UPDATE users SET last_login_ip = ? WHERE id = ?', [ip, user.id]).catch((err) => console.error('login: last_login_ip:', err.message));
 
     const sessionId = allocSessionId();
     // Website single sign-on: a secret only this client gets. Client 22 stores the field it replaces ('NULL' upstream)

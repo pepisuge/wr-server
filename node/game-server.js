@@ -17,6 +17,7 @@ const { loadCoupons } = require('./game/coupon');
 const { loadMaps } = require('./game/maps');
 const { setAuthDb } = require('./game/gm');
 const { setAuthDb: setShopAuthDb } = require('./game/shop');
+const { setAuthDb: setReferralAuthDb } = require('./game/referral');
 const { startWeb } = require('./game/web');
 
 function logPacket(label, pkt) {
@@ -24,7 +25,7 @@ function logPacket(label, pkt) {
 }
 
 // Highest sql/ patch this code needs (sql/12 records them in wres2.schema_version). Bump with every new patch.
-const SCHEMA_VERSION = 14;
+const SCHEMA_VERSION = 17;
 async function checkSchema(db) {
   const [rows] = await db.query('SELECT MAX(version) AS v FROM schema_version').catch(() => [[{ v: null }]]);
   const v = rows[0].v;
@@ -49,6 +50,7 @@ async function main() {
   setAuthDb(authDb);
   setClanAuthDb(authDb);
   setShopAuthDb(authDb); // shop.js's CB01 rename also touches masterserver.users.displayname
+  setReferralAuthDb(authDb); // registration / last-login IPs
   await loadGameConfig(db);
   await loadClans(db);
   await loadItems(db);
