@@ -3,7 +3,8 @@
 Adds the clan system to the War Rock client 22 for this server:
 
 - the lobby **TRAINING** button becomes **CLAN** and opens the clan page of the website in a client-style window (title bar, close box, drag), already signed in (single sign-on from the game login);
-- clan emblems in the lobby user list and in rooms come from the server, change without restarting the game, and fall back to a default emblem instead of a white box.
+- clan emblems in the lobby user list and in rooms come from the server, change without restarting the game, and fall back to a default emblem instead of a white box;
+- three maps the client ships but hides become playable: BlocHalloween, X-Velruf, Grendel (and Paroho's modes, misspelt `Ture` in its `MapInfo.xml`, are offered).
 
 It is our own code and images plus a recipe of changes: no game file is distributed.
 

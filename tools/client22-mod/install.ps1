@@ -65,11 +65,34 @@ function Set-Menu([bool]$patch) {
   Write-Host "Menu_eng.dds: $(if ($patch) {'TRAINING button relabelled CLAN'} else {'restored'})"
 }
 
+# Maps: text edits, each one either way. 37 BlocHalloween and 38 X-Velruf are disabled in MapList.xml, 39 GRUNDEL is
+# missing from it and its MapInfo (like X-Velruf's) carries the id of the map it was copied from; Paroho says "Ture".
+$mapEdits = @(
+  @('maps\MapList.xml', '<_Map Name="XVelruf"/>', '<Map Name="XVelruf"/>'),
+  @('maps\MapList.xml', '<_Map Name="BlocHalloween"/>', '<Map Name="BlocHalloween"/>'),
+  @('maps\MapList.xml', "<Map Name=`"Darkglow`"/>`r`n</MapList>", "<Map Name=`"Darkglow`"/>`r`n`t<Map Name=`"GRUNDEL`"/>`r`n</MapList>"),
+  @('maps\XVelruf\MapInfo.xml', '<Identity ID="14"/>', '<Identity ID="38"/>'),
+  @('maps\GRUNDEL\MapInfo.xml', '<Identity ID="22"/>', '<Identity ID="39"/>'),
+  @('maps\PAROHO\MapInfo.xml', '"Ture"', '"True"')
+)
+function Set-Maps([bool]$patch) {
+  $latin1 = [Text.Encoding]::GetEncoding(28591) # byte for byte
+  foreach ($e in $mapEdits) {
+    $path = Join-Path $Game $e[0]
+    $from, $to = if ($patch) { $e[1], $e[2] } else { $e[2], $e[1] }
+    $text = [IO.File]::ReadAllText($path, $latin1)
+    if ($text.Contains($from)) { [IO.File]::WriteAllText($path, $text.Replace($from, $to), $latin1) }
+    elseif (-not $text.Contains($to)) { Write-Host "$($e[0]): unknown version, left alone" -ForegroundColor Yellow }
+  }
+  Write-Host "Maps: $(if ($patch) {'BlocHalloween, X-Velruf, Grendel enabled; Paroho modes fixed'} else {'restored'})"
+}
+
 $ourFiles = @('system\dinput8.dll', 'system\dinput8.ini', 'texture\Cland.jpg', 'texture\Avata\DefaultClanMark.jpg')
 
 if ($Uninstall) {
   Set-Exe $false
   Set-Menu $false
+  Set-Maps $false
   foreach ($f in $ourFiles) { Remove-Item (Join-Path $Game $f) -ErrorAction SilentlyContinue }
   Write-Host 'Clan mod removed.' -ForegroundColor Green
   exit 0
@@ -77,6 +100,7 @@ if ($Uninstall) {
 
 Set-Exe $true
 Set-Menu $true
+Set-Maps $true
 Copy-Item (Join-Path $here 'dinput8.dll') (Join-Path $Game 'system\dinput8.dll') -Force
 Set-Content -Path (Join-Path $Game 'system\dinput8.ini') -Value "[clan]`r`nurl=http://${Server}:$WebPort/clan" -Encoding ASCII
 Copy-Item (Join-Path $here 'Cland.jpg') (Join-Path $Game 'texture\Cland.jpg') -Force
