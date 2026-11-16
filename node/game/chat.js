@@ -134,15 +134,8 @@ function handleChat(socket, pkt, db) {
   }
 }
 
-// A server-authored line in the room's chat, not a reply to any incoming
-// CHAT packet - used by the autostart countdown (gamesubs.js). Tried NOTICE1
-// (targetId=999, ">>" prefix, matching every real Notice1 use in both
-// references) hoping for distinct system styling - live test showed it
-// renders as a popup instead, once per second, unusable for a countdown.
-// Back to ROOM_TO_ALL, the type confirmed to render as an ordinary chat line
-// (same color as a normal player message - a real but lesser problem than a
-// popup spamming every tick). Kept the "System>> " prefix since it doesn't
-// hurt and matches the same "name>> text" shape every other message uses.
+// A server line in the room's chat (autostart countdown). ROOM_TO_ALL renders as a chat line; NOTICE1 shows a popup
+// every time, unusable once a second.
 function broadcastSystemMessage(room, text) {
   const sockets = roomSockets(room);
   broadcast(sockets, [1, 0, 'System', TYPE.ROOM_TO_ALL, SYSTEM_TARGET, 'NULL', `System>> ${text}`]);
