@@ -10,7 +10,7 @@ const { xpForLevel, levelForXp } = require('./progression');
 const { handleRoomSpectate, removeFromRoom, notifyLobbyAfterLeave, setMaster, ROOM_LEAVE, ROOM_KICK } = require('./rooms');
 const { endRound } = require('./roundtimer');
 const { getMap } = require('./maps');
-const { grantItem } = require('./shop');
+const { grantItem, sendSuccess } = require('./shop');
 
 // Bans/unbans live on the AUTH db (masterserver.users.status, the same
 // column auth/handlers.js already checks at login - status<=0 blocks entry)
@@ -353,8 +353,9 @@ function cmdStrikes(socket, db, args) {
 }
 
 // /giveitem, /giveroom: reuse shop.js's own grantItem(db, u, code, days) -
-// the exact same INSERT a real item-shop purchase makes, so the target's
-// next Authorization packet already reflects it, no bespoke insert here.
+// the exact same INSERT a real item-shop purchase makes - then push the
+// purchase reply (full item list) so the client shows the item at once,
+// no reconnect needed.
 async function cmdGiveItem(socket, db, args) {
   const target = resolveTarget(args[0]);
   const code = (args[1] || '').toUpperCase();
@@ -363,8 +364,8 @@ async function cmdGiveItem(socket, db, args) {
     return reply(socket, 'Usage: /giveitem <online player> <code> <days>');
   }
   await grantItem(db, target.online, code, days);
+  sendSuccess(target.online.socket, target.online);
   reply(socket, `${code} given to ${target.online.displayname} for ${days} days.`);
-  scheduleReconnect(target.online, socket);
 }
 
 async function cmdGiveRoom(socket, db, args) {
@@ -376,9 +377,11 @@ async function cmdGiveRoom(socket, db, args) {
 
   const room = getChannel(u.channel).rooms.get(u.roomId);
   const targets = [...room.players.keys()].map((sid) => users.get(sid)).filter(Boolean);
-  for (const t of targets) await grantItem(db, t, code, days);
+  for (const t of targets) {
+    await grantItem(db, t, code, days);
+    sendSuccess(t.socket, t);
+  }
   reply(socket, `${code} given to the whole room (${targets.length} players) for ${days} days.`);
-  for (const t of targets) scheduleReconnect(t, socket);
 }
 
 function cmdUserInfo(socket, db, args) {
