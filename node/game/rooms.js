@@ -33,10 +33,7 @@ function maxPlayersFor(channel, index) {
   return 8;
 }
 
-// The 25-field room description block shared by RoomCreation, RoomJoin,
-// RoomList and RoomUpdate (Game/Packets/*.cs all have an identical
-// addRoomInfo). ponytail: no teams/slots/clan war/game modes yet - those only
-// matter once actual matches are in scope, well past this phase.
+// The 25-field room description shared by RoomCreation, RoomJoin, RoomList and RoomUpdate (addRoomInfo).
 function roomInfoFields(room) {
   return [
     room.id,
@@ -178,11 +175,7 @@ function handleRoomCreation(socket, pkt) {
     maxPlayers: maxPlayersFor(u.channel, maxPlayersIndex),
     map: 1,
     mode: 2, // Team_Death_Match placeholder - real map/mode rotation is a later phase
-    // ponytail: was 2 (5 rounds via explosive.js's ROUND_LIMITS) - real capture
-    // shows the client never sends CHANGE_ROUNDS/CHANGE_KILLS (53/55) for an
-    // Explosive room left untouched, yet its UI shows "single round" right
-    // away. 0 matches that (ROUND_LIMITS[0]=1) without regressing TDM, whose
-    // own default was equally unverified.
+    // A fresh Explosive room shows "single round" and the client sends no CHANGE_ROUNDS for it: ROUND_LIMITS[0] = 1.
     setting: 0,
     state: 1, // Waiting
     type,
@@ -222,14 +215,8 @@ function handleRoomCreation(socket, pkt) {
   sendRoomUpdateToLobby(room, false);
 }
 
-// Invoked from clan.js's START_WAR - no client packet triggers this. ToXiiC's
-// Room.cs DOES wire up isClanWar/Clan1/Clan2 and real win/lose/exp handling
-// once a war room exists (Chapter-1-Server's own reference stays silent on
-// it, same pattern as the clan system itself - see Fase 45) - what's still
-// missing is how a real client actually *starts* one; no CLAN_SYSTEM subtype
-// does it, maybe RoomCreation's own fields directly. Reuses
-// the same room shape/broadcast as a normal creation so the rest of
-// rooms.js (join/leave/roster) treats it identically to any other room.
+// Clan war room (clan.js): isClanWar/clan1/clan2 as in ToXiiC's Room.cs; otherwise a normal room, so join, leave and
+// roster treat it like any other.
 function createClanWarRoom(challenger, opponentClanId) {
   const chan = getChannel(challenger.channel);
   const id = nextFreeRoomId(chan);
@@ -341,18 +328,8 @@ function handleRoomJoin(socket, pkt) {
   const u = socket.user;
   if (!u || u.roomId !== null) return;
 
-  // roomId=0 is what the real client sends when accepting an invite from its
-  // popup (found via a live marker test - it never echoes back the real room
-  // id/password we send in the invite payload for this field, always 0) -
-  // it's a fixed client-side value for that action, not the real room. Room
-  // ids are 0-based here (matching both C# references), so 0 can also be a
-  // real room now - try it literally first (a direct click on room 0 in the
-  // list must still work), and only fall back to whichever room
-  // handleRoomInvite last remembered inviting this user to (u.pendingInviteRoomId)
-  // if room 0 doesn't actually exist. Still ambiguous in the narrow case
-  // where room 0 is genuinely occupied at the same time as a pending invite
-  // to a different room - unresolved without a live test telling the two
-  // apart some other way.
+  // Accepting an invite, the client always sends room 0 (live). Room 0 can be real too: try it first, then the room
+  // this player was last invited to. ponytail: wrong when room 0 exists and the invite was to another room.
   let roomId = Number(pkt.blocks[0]);
   const password = pkt.blocks[1] || '';
   const chan = getChannel(u.channel);
@@ -478,24 +455,10 @@ function setMaster(room, player) {
   return true;
 }
 
-// Shared by handleRoomLeave (explicit ROOM_LEAVE packet) and the socket
-// 'close' handler (handlers.js) - a dropped connection (crash, closed
-// client, no explicit leave) must clean up the room the same way an
-// explicit leave does, otherwise the player becomes a permanent "ghost"
-// still occupying a slot under a session that no longer resolves to any
-// socket (found via clan war testing: reconnecting mid-test without ever
-// leaving left duplicate stale entries in the room roster). Also pays out
-// the leaving player's match-end reward (see progression.js's applyMatchEnd)
-// - if they're the second-to-last player standing, endRound() (below) pays
-// everyone else and declares a winner; if only they quietly leave a
-// still-full room, this is the only reward that happens for them.
-// Does NOT notify the lobby itself (see notifyLobbyAfterLeave) - a real
-// client that left a room stopped reacting to lobby room-list updates that
-// arrived before its own RoomLeave reply, matching Room.Remove/Destroy's own
-// packet order (member broadcast, then reply to the leaver, then - only
-// after that, back in the RoomLeave *handler* - the lobby update). Callers
-// own sequencing their own reply between this and notifyLobbyAfterLeave.
-// Returns the room left (or null if not in one).
+// Shared by RoomLeave and the socket 'close' handler: a dropped connection must leave the room like a real leave, or
+// it stays a ghost in the roster. Pays the leaver's match-end reward. The lobby is told separately
+// (notifyLobbyAfterLeave), after the caller's reply to the leaver: the client ignores room-list updates that arrive
+// before its RoomLeave reply. Returns the room left, or null.
 function removeFromRoom(db, u) {
   if (!u || u.roomId === null) return null;
 
@@ -532,13 +495,7 @@ function removeFromRoom(db, u) {
     if (wasPlaying && room.players.size === 1) endRound(room, db); // last one standing wins
   }
 
-  // Ported from Room.Remove/Destroy's `Send(pBuffer); u.Send(pBuffer);` -
-  // remaining players' own roster never drops someone who left unless they
-  // get this broadcast too, not just the lobby update. Lives here (not in
-  // handleRoomLeave) so a dropped connection (crash, socket 'close' in
-  // handlers.js) gets it exactly like an explicit leave does - it used to
-  // only fire for the explicit RoomLeave packet, leaving a "ghost" player
-  // for anyone whose room-mate crashed instead of leaving normally.
+  // Room.Remove's broadcast: without it the others keep the leaver in their roster (also after a crash).
   if (room.players.size > 0) {
     const fields = [1, u.sessionId, oldSlot, room.players.size, room.master, u.xp, u.money];
     const sockets = roomSockets(room);
@@ -556,20 +513,8 @@ function notifyLobbyAfterLeave(room) {
   else sendRoomUpdateToLobby(room, true);
 }
 
-// Ported from Game/Handlers/RoomLeave.cs + Packets/RoomLeave.cs. The
-// broadcast to remaining room members (Room.Remove's second Send) now lives
-// in removeFromRoom itself, shared with the disconnect path - this only
-// still owns the reply to the leaver's own socket, sent before the lobby
-// update (notifyLobbyAfterLeave) to match the reference's packet order.
-//
-// Also pushes the leaver a fresh full room-list page (same call
-// handleChannelSelection already makes on first entering the lobby) -
-// found live that the incremental ROOM_LIST_UPDATE broadcast alone doesn't
-// make a room reappear in the real client's list after returning from one:
-// the room stayed invisible until manually paging the list, which sends a
-// real RoomList request/response round-trip. Not in the reference (its
-// RoomLeave.cs only refreshes the leaver's *user* list, not the room list),
-// but real client behavior wins.
+// RoomLeave.cs: the reply to the leaver, then the lobby update. Also a full room-list page (not in the reference): the
+// real client does not show a room again from the incremental update alone until the list is paged.
 function handleRoomLeave(socket, db) {
   const u = socket.user;
   if (!u || u.roomId === null) return;
@@ -631,20 +576,8 @@ function handleRoomListRequest(socket, pkt) {
   socket.sendPacket(ROOM_LIST, fields);
 }
 
-// Ported from Game/Handlers/RoomKick.cs's wire format and host-only check
-// (Room.Master == Player.Id, i.e. the same "master = slot" convention
-// removeFromRoom's comment already flags as the only host tracking this
-// codebase has). Looked like a stub at first read - KickPlayer only ever
-// sends this one notice, never touches Room.Players/Master/lobby - but a
-// live capture against the real client showed why that's enough: the kicked
-// client reacts to this notice by sending its own explicit RoomLeave right
-// away, which already runs the real removal (removeFromRoom, below). Calling
-// removeFromRoom *here* too was the actual bug this shipped with: it raced
-// ahead of that RoomLeave, so by the time it arrived u.roomId was already
-// null, handleRoomLeave's guard silently swallowed it with no reply packet
-// at all, and the real client crashed waiting on one (ECONNRESET right
-// after). Reference behavior, once you watch the real client obey it, was
-// already complete - notify only, let the client's own leave do the rest.
+// RoomKick.cs: master only, notice only. The kicked client answers with its own RoomLeave, which removes it; removing
+// it here as well made that RoomLeave go unanswered and crashed the client (live).
 function handleRoomKick(socket, pkt) {
   const u = socket.user;
   if (!u || u.roomId === null) return;
@@ -666,18 +599,8 @@ function handleRoomKick(socket, pkt) {
 
 const ROOM_INVITE_ERR = { INVITED: 93010, GENERIC: 93020, IN_ROOM: 93030 };
 
-// Field order lifted from Packets/RoomInvite.cs's Append() calls reads fine
-// on paper - [..., message, roomId, roomPassword] at the tail - and matches
-// real captures embedded in WarRock-ToXiiC-Core's own source comments. But a
-// live marker test (send a distinct value in every candidate slot, read
-// back which ones the client's own follow-up RoomJoin used) showed the
-// actual client we're targeting only ever picks up ONE of the two: password,
-// from the slot right after the message. The other RoomJoin field always
-// arrives as a literal 0, no matter what's sent in any slot - the client's
-// "accept invite" flow doesn't echo a room id back at all, it sends a fixed
-// sentinel and expects the server to already remember which room it invited
-// that player to (see handleRoomJoin's u.pendingInviteRoomId). room.id is
-// still sent here (harmless, unused) in case some client build does read it.
+// Packets/RoomInvite.cs field order. The client reads only the password (after the message) and joins with room 0,
+// so the server remembers the invited room (u.pendingInviteRoomId); room.id is sent anyway.
 function inviteFields(inviter, message, room) {
   const clan = clanInfo(inviter);
   return [

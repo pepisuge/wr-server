@@ -97,6 +97,7 @@ Send only the notification to the target. The real client then sends its own `Ro
 `RoomLeave` is sent to the leaving player **and** broadcast to those who stay. Fields: the third is the slot the player held; the last two are XP and money after payout.
 
 - Every exit path (voluntary, kick, disconnect, crash) goes through `removeFromRoom`, which does the broadcast.
+- Order: broadcast to the room, reply to the leaver, then the lobby update; the client ignores room-list updates that arrive before its own reply. The leaver also gets a full room-list page: from the incremental update alone the real client does not show the room again until the list is paged.
 - If the master leaves, a new master is chosen by priority `1 + premium`, scanning slots in order; the new master is set ready.
 - Order: broadcast to remaining players, reply to the leaver, **then** the lobby update.
 
