@@ -37,7 +37,7 @@ It also carries `ScoreboardA/B` (in FFA: target kills and the leader's kills).
 ## Spawn (GameSub 150)
 
 - `payload[3]` is the **class**, valid `0-4` (`Engineer, Medic, Sniper, Assault, Heavy`). An out-of-range value crashes other clients.
-- `payload[2]` selects team **and** spawn point; the value-to-point mapping is not stable between sessions. `9` locked a client in a respawn loop.
+- `payload[2]` selects team **and** spawn point; the value-to-point mapping is not stable between sessions. `9` locked a client in a respawn loop. The spawn index the server answers with changes nothing in TDM (live: per-team and shared round-robins, -2, -1, 2, 10 all landed on the same per-team point), so only FFA gets a round-robin, like the reference.
 - Spawning is always **client-initiated** in both references. In TDM the client asks to respawn about **19 s** after death; the server safety-net auto-respawn is set to 25 s, reusing the player's last real spawn payload.
 - FFA uses a shared round-robin counter 0-19, reset every round.
 - `map_data` gives each map a `flag_count` and a `flag_state` `"X-Y"`: the two spawn-anchor flags, one per team.
