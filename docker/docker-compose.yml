@@ -23,6 +23,7 @@ services:
       - ../sql/12-schema-version.sql:/docker-entrypoint-initdb.d/12-schema-version.sql:ro
       - ../sql/13-cash-items-buyable.sql:/docker-entrypoint-initdb.d/13-cash-items-buyable.sql:ro
       - ../sql/14-px-buyable.sql:/docker-entrypoint-initdb.d/14-px-buyable.sql:ro
+      - ../sql/17-referral.sql:/docker-entrypoint-initdb.d/17-referral.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p\"$$MARIADB_ROOT_PASSWORD\" --silent"]
       interval: 5s

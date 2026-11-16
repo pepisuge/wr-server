@@ -8,6 +8,7 @@ const clan = require('./clan');
 const { loadUserDetails } = require('./progression');
 const { webTokenUser } = require('./internal-client');
 const emblems = require('./emblems');
+const referral = require('./referral');
 
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
 const MAX_BODY = 4096;
@@ -105,10 +106,11 @@ const act = (s, action, label, extra = '', cls = '') =>
 function registerPage(res, error) {
   send(res, error ? 400 : 200, page('Register', `<div class="box">${msg(error)}${form('/register',
     field('username', 'Username (login, 3-20 letters or digits)') + field('nickname', 'Nickname (in game, 3-16 letters or digits)') +
-    field('password', 'Password (6-16 characters)', 'password') + field('password2', 'Repeat password', 'password'), 'Create account')}</div>`));
+    field('password', 'Password (6-16 characters)', 'password') + field('password2', 'Repeat password', 'password') +
+    field('invitedby', 'Invited by (nickname, optional): both of you get premium days as you level up'), 'Create account')}</div>`));
 }
 
-async function register(req, res, authDb, ip) {
+async function register(req, res, db, authDb, ip) {
   const b = await readBody(req);
   const [username, nickname, password] = [b.get('username') || '', b.get('nickname') || '', b.get('password') || ''];
   if (!USERNAME_RE.test(username)) return registerPage(res, 'Invalid username.');
@@ -120,21 +122,31 @@ async function register(req, res, authDb, ip) {
 
   const [taken] = await authDb.query('SELECT username FROM users WHERE username = ? OR displayname = ?', [username, nickname]);
   if (taken.length) return registerPage(res, 'Username or nickname already taken.');
+  const invitedBy = (b.get('invitedby') || '').trim();
+  const [[inviter]] = invitedBy ? await authDb.query('SELECT id, register_ip, last_login_ip FROM users WHERE displayname = ?', [invitedBy]) : [[]];
+  if (invitedBy && !inviter) return registerPage(res, 'Unknown "Invited by" nickname.');
 
   const salt = newScryptSalt();
   const hash = await hashPassword(password, salt);
   // users.id has no AUTO_INCREMENT upstream; the primary key and sql/09's unique names reject a concurrent duplicate.
   try {
     await authDb.query(
-      'INSERT INTO users (id, username, status, displayname, password, passwordsalt) SELECT COALESCE(MAX(id), 0) + 1, ?, 1, ?, ?, ? FROM users',
-      [username, nickname, hash, salt]
+      'INSERT INTO users (id, username, status, displayname, password, passwordsalt, register_ip) SELECT COALESCE(MAX(id), 0) + 1, ?, 1, ?, ?, ?, ? FROM users',
+      [username, nickname, hash, salt, ip]
     );
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') return registerPage(res, 'Username or nickname already taken, try again.');
     throw err;
   }
   note('register', ip);
-  send(res, 200, page('Register', `<div class="box"><p class="ok">Account created. Log in from the game, or <a href="/login">here</a> to manage your clan.</p></div>`));
+  let invite = '';
+  if (inviter && referral.sameIp(inviter, { register_ip: ip })) invite = ` Not linked to ${esc(invitedBy)}: invitations from the same network do not count.`;
+  else if (inviter) {
+    const [[me]] = await authDb.query('SELECT id FROM users WHERE username = ?', [username]);
+    await db.query('INSERT INTO referrals (invitee, inviter) VALUES (?, ?)', [me.id, inviter.id]);
+    invite = ` Invited by ${esc(invitedBy)}: both of you get ${referral.REWARD_DAYS} days of premium for every level you gain.`;
+  }
+  send(res, 200, page('Register', `<div class="box"><p class="ok">Account created.${invite} Log in from the game, or <a href="/login">here</a> to manage your clan.</p></div>`));
 }
 
 function loginPage(res, error) {
@@ -329,7 +341,7 @@ async function route(req, res, db, authDb) {
   if (path === '/' && !post) {
     return send(res, 200, page('War Rock', `<div class="box"><p>Chapter 1 private server.</p><p>${s ? '<a href="/clan">Manage your clan</a>' : '<a href="/register">Create an account</a> &middot; <a href="/login">Login</a>'}</p></div>`, s));
   }
-  if (path === '/register') return post ? register(req, res, authDb, ip) : registerPage(res);
+  if (path === '/register') return post ? register(req, res, db, authDb, ip) : registerPage(res);
   if (path === '/login') return post ? login(req, res, authDb, ip) : loginPage(res);
   if (path === '/clans' && !post) return clansPage(res, s);
   if (path === '/logout' && post) {

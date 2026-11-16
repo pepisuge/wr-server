@@ -161,6 +161,8 @@ function applyMatchEnd(db, user, points = 0, room = null) {
     const bonusMoney = (newLevel - oldLevel) * GameConfig.levelUpMoneyReward;
     user.money += bonusMoney;
     levelUp = { newLevel, xp: user.xp, bonusMoney };
+    // lazy: referral.js requires this file
+    require('./referral').onLevelUp(db, user.id, newLevel).catch((err) => console.error('referral reward failed:', err.message));
   }
 
   // Relative, not absolute: absolute writes issued in sequence can land out of order and overwrite a newer balance.

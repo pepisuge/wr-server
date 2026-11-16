@@ -298,6 +298,23 @@ const { users } = require('../game/state');
     clan.clans.delete(82);
   }
 
+  // Referral (#34): same IP pays nothing, one reward per level gained, cap of 3 rewarded invites, no tier downgrade
+  {
+    const ref = require('../game/referral');
+    assert.ok(ref.sameIp({ register_ip: '1.1.1.1', last_login_ip: '2.2.2.2' }, { register_ip: '3.3.3.3', last_login_ip: '2.2.2.2' }));
+    assert.ok(!ref.sameIp({ register_ip: '1.1.1.1', last_login_ip: null }, { register_ip: '3.3.3.3', last_login_ip: null }));
+    const r = (paidLevel, newLevel, inviterRewarded = 0, shareIp = false) => ref.rewardLevels({ paidLevel, newLevel, inviterRewarded, shareIp });
+    assert.deepStrictEqual(r(1, 4), { levels: 3, advance: true }, 'a jump of 3 levels pays 3 times');
+    assert.deepStrictEqual(r(4, 4), { levels: 0, advance: false }, 'a level already paid does not pay again');
+    assert.deepStrictEqual(r(1, 2, 0, true), { levels: 0, advance: true }, 'same IP: burnt, not paid');
+    assert.deepStrictEqual(r(1, 2, 3), { levels: 0, advance: false }, 'fourth invite earns nothing');
+    assert.deepStrictEqual(r(5, 6, 3), { levels: 1, advance: true }, 'an invite already rewarded keeps paying');
+    const now = 1000000;
+    assert.deepStrictEqual(ref.extendPremium({ premium: 0, premium_expiredate: 0 }, 3, now), { premium: 1, premium_expiredate: now + 3 * 86400 });
+    assert.deepStrictEqual(ref.extendPremium({ premium: 3, premium_expiredate: now + 100 }, 3, now), { premium: 3, premium_expiredate: now + 100 + 3 * 86400 }, 'Gold kept');
+    assert.deepStrictEqual(ref.extendPremium({ premium: 3, premium_expiredate: now - 1 }, 3, now), { premium: 1, premium_expiredate: now + 3 * 86400 }, 'expired Gold -> Bronze from now');
+  }
+
   // Emblem uploads: PNG/JPEG/BMP only, size and dimensions capped
   {
     const { checkUpload, galleryEmblem, imageInfo } = require('../game/emblems');
