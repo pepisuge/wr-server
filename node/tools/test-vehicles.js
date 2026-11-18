@@ -53,5 +53,16 @@ const db = { query: async (sql) => [rows[Object.keys(rows).find((t) => sql.inclu
   await new Promise((ok) => setTimeout(ok, 80));
   assert.strictEqual(v.health, 3500, 'respawned after its interval');
   assert.ok(v.seats.every((s) => !s.player));
+
+  // environment damage: b (alive again, back in the respawned vehicle) sinks it: 60% then dead
+  Object.assign(b, { alive: true, health: 1000, vehicle: null }); // what a respawn does
+  run(SUB.ENTER_VEHICLE, b, [0, 0, 3, 0, 0, 0, 0, 0, 0, 0], ub);
+  const sink = [0, 0, 0, 0, 3, 0, 1, 0, 0];
+  r = run(SUB.ENVIRONMENT_DAMAGE, b, sink, ub);
+  assert.strictEqual(r.payload[8], 3500 - 2100);
+  assert.strictEqual(run(SUB.ENVIRONMENT_DAMAGE, a, sink, ua), null, 'only someone inside reports it');
+  r = run(SUB.ENVIRONMENT_DAMAGE, b, sink, ub);
+  assert.strictEqual(v.health, 0);
+  assert.strictEqual(b.alive, false, 'crew dies with the sunk vehicle');
   console.log('test-vehicles: ok');
 })();

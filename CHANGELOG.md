@@ -5,7 +5,7 @@ apply the new `sql/` patches it lists before starting the new code (`schema_vers
 
 ## Unreleased
 
-- Vehicles and artillery (Urban Ops / Battle Group): enter, change seat, leave, repair, damage to and from vehicles, destruction kills the crew, respawn after the vehicle's interval (#5). Data from the existing `vehicletypes`, `vehicleseats`, `vehicleweapons`, `map_vehicles` tables.
+- Vehicles and artillery (Urban Ops / Battle Group): enter, change seat, leave, repair, damage to and from vehicles, destruction kills the crew, respawn after the vehicle's interval (#5). Vehicles also take environment damage (crashes, 60% when sunk in water). Data from the existing `vehicletypes`, `vehicleseats`, `vehicleweapons`, `map_vehicles` tables.
 
 ## v0.1.0 (2026-11-16)
 

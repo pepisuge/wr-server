@@ -621,7 +621,8 @@ function handleSuicide(room, player, payload, u, db) {
 // zone), reported by the client itself. payload[2] entity type (1 = player, 0 = vehicle), [5] damage. A lethal hit is
 // broadcast as a Suicide (157) with the slot in [2], like the reference. Vehicle damage is skipped: no vehicles yet.
 function handleEnvironmentDamage(room, player, payload, u, db) {
-  if (room.state !== 2 || !player.alive || Number(payload[2]) !== 1) return null;
+  if (room.state !== 2 || !player.alive) return null;
+  if (Number(payload[2]) !== 1) return vehicleEnvironmentDamage(room, player, payload, db);
   fallDamaged(u);
   const damage = Number(payload[5]);
   if (!(damage > 0)) return null;
@@ -928,9 +929,14 @@ function handleObjectDamage(room, player, payload, u, db) {
       console.error('ObjectDamage: failed to persist vehicles_destroyed:', err.message)
     );
   }
-  // ToXiiC's SP_RoomVehicleExplode / SP_RoomRespawnVehicle, without the Nexon-only field.
-  broadcastPacket(sockets, XOR.external, GAME_PACKET, [1, player.slot, room.id, 2, SUB.OBJECT_DESTROY,
-    0, 1, 0, v.id, player.slot, 0, 0, 0, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'FFFF']);
+  explodeVehicle(room, v, player.slot);
+  return null;
+}
+
+// ToXiiC's SP_RoomVehicleExplode / SP_RoomRespawnVehicle, without the Nexon-only field.
+function explodeVehicle(room, v, bySlot) {
+  broadcastPacket(roomSockets(room), XOR.external, GAME_PACKET, [1, bySlot, room.id, 2, SUB.OBJECT_DESTROY,
+    0, 1, 0, v.id, bySlot, 0, 0, 0, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'FFFF']);
   v.respawnTimer = setTimeout(() => {
     v.respawnTimer = null;
     if (room.state !== 2 || room.vehicles?.get(v.id) !== v) return;
@@ -938,6 +944,29 @@ function handleObjectDamage(room, player, payload, u, db) {
     broadcastPacket(roomSockets(room), XOR.external, GAME_PACKET, [1, -1, room.id, 2, SUB.VEHICLE_SPAWN,
       0, 1, v.id, 0, 0, 0, 20, 1, 0, 0, 1200000, -1036745, 1200000, '0.0000', '0.0000', '0.0000', '0.0000', '0.0000', '0.0000', 0, 0, 'DV01']);
   }, v.spawnMs);
+}
+
+// Environment damage to a vehicle (ToXiiC WorldDamage, [2] != 1), reported by someone inside it: [4] vehicle id,
+// [5]/[6] damage percent of max health (integer division, as ToXiiC), [6] = 1 sunk in water = 60%. At 0 the crew
+// dies as a suicide (157) and the vehicle explodes.
+function vehicleEnvironmentDamage(room, player, payload, db) {
+  const v = vehicleOf(room, payload[4]);
+  const per = Number(payload[6]);
+  if (!v || v.health <= 0 || player.vehicle?.id !== v.id || !(per > 0)) return null;
+  const pct = per === 1 ? 60 : Math.trunc(Number(payload[5]) / per);
+  const damage = Math.ceil((v.maxHealth * pct) / 100);
+  if (!(damage > 0)) return null;
+  v.health = Math.max(0, v.health - damage);
+  const out = padded(payload, 9);
+  out[5] = damage;
+  out[7] = damage;
+  out[8] = v.health;
+  if (v.health > 0) return { payload: out };
+  for (const p of V.occupants(room, v)) {
+    suicideDeath(p, users.get(p.sessionId) ?? { deaths: 0 }, db); // dies even if its session is already gone
+    broadcastPacket(roomSockets(room), XOR.external, GAME_PACKET, [1, p.slot, room.id, 2, SUB.SUICIDE, 0, 1, p.slot, 0, 0, 0, 0, 0, 0]);
+  }
+  explodeVehicle(room, v, player.slot);
   return null;
 }
 

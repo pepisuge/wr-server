@@ -160,6 +160,8 @@ Layouts from ToXiiC's G1 handlers (its block n = `payload[n-4]`), checks from th
 - At 0 health: each crew member gets a PlayerDeath (152), then ObjectDestroy 153 (ToXiiC's explode packet without its Nexon-only field), then VehicleSpawn 151 after the interval.
 - PlayerDamage 103 with `[2]` = 0 is a vehicle weapon (the attacker's seat weapon, `[22]` = vehicle code) or artillery (needs DX01).
 - ROOM_HEALTH 0x7541 now carries each player's vehicle/seat and every vehicle's health.
+- EnvironmentDamage 500 with `[2]` != 1 is a vehicle's (ToXiiC `WorldDamage`): `[4]` vehicle id, damage % = `[5]` / `[6]` (integer division), `[6]` = 1 means sunk in water = 60% of max health. Accepted only from someone inside that vehicle. At 0 the crew dies as Suicide 157, then ObjectDestroy 153. Reply `[5]` = `[7]` = damage, `[8]` = vehicle health.
+- **Missing: breathing.** Live: a player staying under water until the breath bar is empty takes no damage. Neither reference has any drowning code (no water/breath/oxygen in ToXiiC or Chapter-1), and no packet from the client for it has been captured yet (start with `LOG_LEVEL=debug`, drown, look for GameSub 500 or an unhandled sub).
 
 Live-tested on client 22 (Havana, one player): enter, seat changes with ammo, leave, damage from a tank's cannon/MG and from RPG/launchers on foot, destruction, respawn. Not yet live: repair, vehicle weapons on players, crew killed with the vehicle.
 
