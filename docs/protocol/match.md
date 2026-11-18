@@ -145,6 +145,26 @@ Server-side, ported from ToXiiC's room thread: client 22 does not bleed by itsel
 - Can damage when `attacker.team != victim.team || room.friendlyFire || mode == FFA`.
 - A friendly-fire kill penalizes the shooter (`kills--`, `deaths++`).
 
+### Vehicles (GameSubs 200-202, 102, 104, 151, 153)
+
+`node/game/vehicles.js` loads `vehicletypes` (health, respawn interval, kind 1 surface / 2 air / 3 ship), `vehicleseats`
+(weapons and ammo per seat), `vehicleweapons` (damage, efficiency % vs personal/surface/air/ship) and `map_vehicles`
+(the map's own vehicle ids, the ones the client sends). A fresh set is created at every match start.
+Layouts from ToXiiC's G1 handlers (its block n = `payload[n-4]`), checks from the Chapter-1 reference:
+
+- EnterVehicle 200: `[2]` vehicle id (real client 22: `[0, 0, 26, 0 x7]`). Reply `[2]` id, `[3]` seat, `[4]` health, `[5]` max, `[6..9]` seat ammo. Only the team inside (or anyone if empty).
+- ChangeSeat 201: `[2]` id, `[3]` target seat, `[4..7]` ammo of the old seat. Reply `[3]` new, `[4]` old seat, `[5..8]` ammo of the new seat.
+- LeaveVehicle 202: `[2]` id, `[4..7]` ammo kept for the seat. Reply `[3]` seat.
+- Repair 102: `[2]` id, `[3]` 1 = repair tower (20%); spanner DR01 10%, pipe wrench DR02 15%; one every 2 s. Reply `[3]` health, `[4]` max.
+- ObjectDamage 104: `[2]` 1 personal weapon / 0 vehicle weapon or artillery, `[3]` vehicle id, `[9]` 0 main / 1 sub weapon, `[10]`=1 and `[11]` radius %, `[22]` weapon (or the attacker's vehicle code). Client 22 also sends `[5]` = the attacker's own vehicle id when shooting from one (live: 8 from a K1A1; junk on foot). Damage = power x efficiency % (item `surface/air/ship`, or the vehicle weapon's list) x radius %. Reply `[4]` attacker slot, `[12]` health, `[13]` previous.
+- At 0 health: each crew member gets a PlayerDeath (152), then ObjectDestroy 153 (ToXiiC's explode packet without its Nexon-only field), then VehicleSpawn 151 after the interval.
+- PlayerDamage 103 with `[2]` = 0 is a vehicle weapon (the attacker's seat weapon, `[22]` = vehicle code) or artillery (needs DX01).
+- ROOM_HEALTH 0x7541 now carries each player's vehicle/seat and every vehicle's health.
+- EnvironmentDamage 500 with `[2]` != 1 is a vehicle's (ToXiiC `WorldDamage`): `[4]` vehicle id, damage % = `[5]` / `[6]` (integer division), `[6]` = 1 means sunk in water = 60% of max health. Accepted only from someone inside that vehicle. At 0 the crew dies as Suicide 157, then ObjectDestroy 153. Reply `[5]` = `[7]` = damage, `[8]` = vehicle health.
+- **Missing: breathing.** Live: a player staying under water until the breath bar is empty takes no damage. Neither reference has any drowning code (no water/breath/oxygen in ToXiiC or Chapter-1), and no packet from the client for it has been captured yet (start with `LOG_LEVEL=debug`, drown, look for GameSub 500 or an unhandled sub).
+
+Live-tested on client 22 (Havana, one player): enter, seat changes with ammo, leave, damage from a tank's cannon/MG and from RPG/launchers on foot, destruction, respawn. Not yet live: repair, vehicle weapons on players, crew killed with the vehicle.
+
 ### Client-side behaviours
 
 - The client leaves the room by itself after about **115 s** without input (anti-AFK timer).
