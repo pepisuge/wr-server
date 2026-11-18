@@ -12,6 +12,7 @@ const { ownsItem } = require('./inventory');
 const { markSpawn, fallDamaged, strike, isTainted } = require('./anticheat');
 const { record } = require('./record');
 const { handleVoteKick, VOTE_KICK } = require('./votekick');
+const V = require('./vehicles');
 
 const GAME_PACKET = 0x7530;
 const SCOREBOARD = 0x7550;
@@ -63,6 +64,13 @@ const SUB = {
   WEAPON_SWITCH: 155,
   SUICIDE: 157,
   ROUND_END_CONFIRM: 7,
+  REPAIR: 102,
+  OBJECT_DAMAGE: 104,
+  VEHICLE_SPAWN: 151,
+  OBJECT_DESTROY: 153,
+  ENTER_VEHICLE: 200,
+  CHANGE_SEAT: 201,
+  LEAVE_VEHICLE: 202,
 };
 
 // A payload shorter than the highest index a handler writes would otherwise
@@ -142,6 +150,9 @@ function beginMatch(room, db) {
   }
   room.spawnPoint = undefined;
   room.groundItems = new Map();
+  for (const v of room.vehicles?.values() || []) clearTimeout(v.respawnTimer);
+  room.vehicles = V.createRoomVehicles(room.map);
+  for (const p of players) p.vehicle = null;
   for (const p of players) p.itemsPlanted = 0;
 
   // Room.Start()'s flags: the map's flag count and its two team spawn flags (map_data), logged; no capture logic yet.
@@ -288,6 +299,7 @@ function handleSpawn(room, player, payload) {
   clearAutoRespawn(player); // the client made it here on its own, no need for the safety net
   player.health = 1000; // covers first spawn and every respawn after a death - Entities/Player.cs's Health=1000, not 100 (confirmed in both references, not Explosive-specific)
   player.alive = true;
+  player.vehicle = null;
   player.itemsPlanted = 0;
   // Spawn.cs's GetByte(3): the class the client just spawned as (Engineer=0,
   // Medic=1, Sniper=2, Assault=3, Heavy=4). Only used for the room roster's
@@ -378,7 +390,8 @@ function rejectHit(player, u, weapon, victim, now = Date.now(), impact = null) {
 }
 
 function handlePlayerDamage(room, player, payload, u, db) {
-  if (room.state !== 2 || payload.length !== 23 || Number(payload[2]) !== 1) return null;
+  const source = Number(payload[2]); // 1 = a personal weapon, 0 = a vehicle weapon or artillery
+  if (room.state !== 2 || payload.length !== 23 || (source !== 1 && source !== 0)) return null;
 
   const targetSlot = Number(payload[3]);
   const victim = [...room.players.values()].find((p) => p.slot === targetSlot);
@@ -392,19 +405,27 @@ function handlePlayerDamage(room, player, payload, u, db) {
   if (room.mode !== FFA_MODE && sameTeam && !room.friendlyFire) return null;
 
   const weapon = String(payload[22] || '').toUpperCase();
-  const impact = { x: Number(payload[14]) || 0, h: Number(payload[15]) || 0, z: Number(payload[16]) || 0 };
-  const rejected = rejectHit(player, u, weapon, victim, Date.now(), impact);
-  if (rejected) {
-    console.log(`[anticheat] hit dropped: slot ${player.slot} (${u.displayname}) -> ${victim.slot}, ${weapon}: ${rejected}`);
-    return null;
+  let damage, hsCalc = 0, headshot = false;
+  if (source === 0) {
+    damage = vehicleWeaponDamage(room, player, u, payload, 0);
+    if (damage === null) {
+      console.log(`[anticheat] hit dropped: slot ${player.slot} (${u.displayname}) -> ${victim.slot}, ${weapon}: not their vehicle weapon or artillery`);
+      return null;
+    }
+  } else {
+    const impact = { x: Number(payload[14]) || 0, h: Number(payload[15]) || 0, z: Number(payload[16]) || 0 };
+    const rejected = rejectHit(player, u, weapon, victim, Date.now(), impact);
+    if (rejected) {
+      console.log(`[anticheat] hit dropped: slot ${player.slot} (${u.displayname}) -> ${victim.slot}, ${weapon}: ${rejected}`);
+      return null;
+    }
+    // boneId (payload[11]) - sessionId = the reference's Hitbox enum: 1237 head, 1239 torso, 1241 lower limbs, 1243 sniper.
+    hsCalc = Number(payload[11]) - u.sessionId;
+    headshot = hsCalc === 1237 && !NO_HEADSHOT_WEAPON.test(weapon);
+    const basePower = getItem(weapon)?.power || FALLBACK_POWER;
+    const falloff = PERSONAL_FALLOFF[weapon] ?? 1;
+    damage = Math.round(basePower * falloff * (HITBOX_MULTIPLIER[hsCalc] ?? 0.75));
   }
-
-  // boneId (payload[11]) - sessionId = the reference's Hitbox enum: 1237 head, 1239 torso, 1241 lower limbs, 1243 sniper.
-  const hsCalc = Number(payload[11]) - u.sessionId;
-  const headshot = hsCalc === 1237 && !NO_HEADSHOT_WEAPON.test(weapon);
-  const basePower = getItem(weapon)?.power || FALLBACK_POWER;
-  const falloff = PERSONAL_FALLOFF[weapon] ?? 1;
-  const damage = Math.round(basePower * falloff * (HITBOX_MULTIPLIER[hsCalc] ?? 0.75));
 
   const previousHealth = victim.health;
   victim.health = Math.max(0, victim.health - damage);
@@ -418,7 +439,12 @@ function handlePlayerDamage(room, player, payload, u, db) {
   if (headshot) out[17] = '99.0000';
 
   if (victim.health > 0) return { payload: out };
+  killPlayer(room, player, u, victim, db, headshot, friendlyFire);
+  return { newType: SUB.PLAYER_DEATH, payload: out };
+}
 
+// A kill's bookkeeping (stats, tickets, win check); the caller sends the death packet.
+function killPlayer(room, player, u, victim, db, headshot, friendlyFire) {
   victim.alive = false;
 
   if (friendlyFire) {
@@ -433,7 +459,7 @@ function handlePlayerDamage(room, player, payload, u, db) {
     db.query('UPDATE user_details SET deaths = deaths + 1, kills = GREATEST(0, CAST(kills AS SIGNED) - 1) WHERE id = ?', [
       player.userId,
     ]).catch((err) => console.error('PlayerDamage: failed to persist friendly-fire penalty:', err.message));
-    return { newType: SUB.PLAYER_DEATH, payload: out };
+    return;
   }
 
   victim.deaths += 1;
@@ -465,7 +491,6 @@ function handlePlayerDamage(room, player, payload, u, db) {
     endRound(room, db);
     sendRoomUpdateToLobby(room, true);
   }
-  return { newType: SUB.PLAYER_DEATH, payload: out };
 }
 
 // No ConfirmDeath handler in the reference, but the client must get the echo or it leaves the room a few seconds later.
@@ -496,6 +521,8 @@ function scheduleAutoRespawn(room, player) {
 
     player.health = 1000;
     player.alive = true;
+    player.vehicle = null;
+  player.vehicle = null;
     const slot = nextSpawnSlot(room);
     // The client's own last Spawn payload: fields 0-6 are not decoded, and zeros spawned team 1 at team 0's flag.
     const payload = player.lastSpawnPayload ? [...player.lastSpawnPayload] : padded([], 10);
@@ -571,7 +598,13 @@ function bleed(room, db) {
   }
   if (!changed) return;
   const players = [...room.players.values()];
-  broadcastPacket(roomSockets(room), XOR.external, ROOM_HEALTH, [players.length, ...players.flatMap((p) => [p.slot, p.health, -1, -1]), 0]);
+  const vehicles = [...(room.vehicles?.values() || [])].sort((a, b) => a.id - b.id);
+  broadcastPacket(roomSockets(room), XOR.external, ROOM_HEALTH, [
+    players.length,
+    ...players.flatMap((p) => [p.slot, p.health, p.vehicle?.id ?? -1, p.vehicle?.seat ?? -1]),
+    vehicles.length,
+    ...vehicles.map((v) => v.health),
+  ]);
 }
 
 function handleSuicide(room, player, payload, u, db) {
@@ -761,6 +794,153 @@ function handleRoundEndConfirm(room, player) {
   return null;
 }
 
+// --- Vehicles (UO/BG). Payload layouts: ToXiiC's G1 handlers (its block n = payload[n - 4]) and one real client-22
+// EnterVehicle ([0, 0, 26, 0 x7]); the Chapter-1 reference's checks. The client drives, aims and reports hits itself.
+const vehicleOf = (room, id) => room.vehicles?.get(Number(id));
+const canHitTeam = (room, player, team) => team === null || team !== player.team || room.friendlyFire || room.mode === FFA_MODE;
+
+// Damage from the seat the player sits in (payload[9]: 0 main, 1 sub weapon) or, on foot, from artillery (DX01 owners).
+// payload[22] names the attacker's vehicle (Chapter-1) or the weapon itself; anything else is not trusted.
+// targetKind: 0 player, 1 surface, 2 air, 3 ship.
+function vehicleWeaponDamage(room, player, u, payload, targetKind) {
+  const named = String(payload[22] || '').toUpperCase();
+  const pv = player.vehicle && vehicleOf(room, player.vehicle.id);
+  if (pv) {
+    const seat = pv.seats[player.vehicle.seat];
+    const code = Number(payload[9]) === 1 ? seat?.sub : seat?.main;
+    const w = code && V.getWeapon(code);
+    if (!w || pv.health <= 0 || (named !== pv.code && named !== code)) return null;
+    return V.damageOf(w.damage, w.vs[targetKind] ?? 0, V.radiusOf(payload));
+  }
+  const art = V.getWeapon(named);
+  if (!art || !ownsCode(u, 'DX01')) return null;
+  return V.damageOf(art.damage, art.vs[targetKind] ?? 0, V.radiusOf(payload));
+}
+
+function handleEnterVehicle(room, player, payload) {
+  const v = vehicleOf(room, payload[2]);
+  if (room.state !== 2 || !player.alive || player.vehicle || !v || v.health <= 0) return null;
+  const team = V.vehicleTeam(room, v);
+  if (team !== null && team !== player.team) return null;
+  const seat = v.seats.find((s) => !V.occupant(room, v, s));
+  if (!seat) return null;
+  seat.player = player;
+  player.vehicle = { id: v.id, seat: seat.id };
+  const out = padded(payload, 10);
+  out[2] = v.id;
+  out[3] = seat.id;
+  out[4] = v.health;
+  out[5] = v.maxHealth;
+  [out[6], out[7], out[8], out[9]] = seat.ammo;
+  return { payload: out };
+}
+
+// The client reports its ammo when it leaves a seat ([4..7]); the next one to sit there gets it back.
+const keepAmmo = (seat, payload) => { seat.ammo = [4, 5, 6, 7].map((i) => Number(payload[i]) || 0); };
+
+function handleChangeSeat(room, player, payload) {
+  const v = vehicleOf(room, payload[2]);
+  if (room.state !== 2 || !player.alive || !v || player.vehicle?.id !== v.id) return null;
+  const from = v.seats[player.vehicle.seat];
+  const to = v.seats[Number(payload[3])];
+  if (!to || to === from || V.occupant(room, v, to)) return null;
+  keepAmmo(from, payload);
+  from.player = null;
+  to.player = player;
+  player.vehicle = { id: v.id, seat: to.id };
+  const out = padded(payload, 9);
+  out[3] = to.id;
+  out[4] = from.id;
+  [out[5], out[6], out[7], out[8]] = to.ammo;
+  return { payload: out };
+}
+
+function handleLeaveVehicle(room, player, payload) {
+  const v = vehicleOf(room, payload[2]);
+  if (room.state !== 2 || !v || player.vehicle?.id !== v.id) return null;
+  const seat = v.seats[player.vehicle.seat];
+  keepAmmo(seat, payload);
+  seat.player = null;
+  player.vehicle = null;
+  const out = padded(payload, 4);
+  out[3] = seat.id;
+  return { payload: out };
+}
+
+// Repair: spanner DR01 10%, pipe wrench DR02 15%, repair tower ([3] = 1) 20% of the vehicle's health; one every 2 s.
+const REPAIR_RATE = { DR01: 0.1, DR02: 0.15 };
+function handleRepair(room, player, payload) {
+  const v = vehicleOf(room, payload[2]);
+  if (room.state !== 2 || !player.alive || !v || v.health <= 0 || v.health >= v.maxHealth) return null;
+  const team = V.vehicleTeam(room, v);
+  if (team !== null && team !== player.team) return null;
+  const now = Date.now();
+  if (now - (player.repairAt || 0) < 2000) return null;
+  const rate = Number(payload[3]) === 1 ? 0.2 : REPAIR_RATE[codeById(player.weapon)];
+  if (!rate) return null;
+  player.repairAt = now;
+  v.health = Math.min(v.maxHealth, v.health + Math.round(v.maxHealth * rate));
+  const out = padded(payload, 5);
+  out[3] = v.health;
+  out[4] = v.maxHealth;
+  return { payload: out };
+}
+
+// ObjectDamage: [2] 1 = personal weapon / 0 = vehicle weapon or artillery, [3] vehicle id, [9] main/sub, [10]/[11]
+// radius, [22] weapon. A destroyed vehicle kills whoever is inside and comes back after its spawn interval.
+function handleObjectDamage(room, player, payload, u, db) {
+  const v = vehicleOf(room, payload[3]);
+  if (room.state !== 2 || !player.alive || payload.length !== 23 || !v || v.health <= 0) return null;
+  if (!canHitTeam(room, player, V.vehicleTeam(room, v))) return null;
+  const weapon = String(payload[22] || '').toUpperCase();
+  let damage;
+  if (Number(payload[2]) === 1) {
+    if (!u.equipment?.[player.class]?.includes(weapon) || isTainted(u)) return null;
+    damage = V.damageOf(getItem(weapon)?.power || 0, getItem(weapon)?.vs[v.kind] ?? 0, V.radiusOf(payload));
+  } else damage = vehicleWeaponDamage(room, player, u, payload, v.kind);
+  if (!damage) return null;
+
+  const previous = v.health;
+  v.health = Math.max(0, v.health - damage);
+  const out = [...payload];
+  out[4] = player.slot;
+  out[12] = v.health;
+  out[13] = previous;
+  if (v.health > 0) return { payload: out };
+
+  const sockets = roomSockets(room);
+  const team = V.vehicleTeam(room, v);
+  for (const victim of V.occupants(room, v)) {
+    if (room.state !== 2) break;
+    const ff = room.mode !== FFA_MODE && victim.team === player.team;
+    const hp = victim.health;
+    victim.health = 0;
+    killPlayer(room, player, u, victim, db, false, ff);
+    const death = [...out];
+    death[2] = 1;
+    death[3] = victim.slot;
+    death[12] = 0;
+    death[13] = hp;
+    broadcastPacket(sockets, XOR.external, GAME_PACKET, [1, player.slot, room.id, 2, SUB.PLAYER_DEATH, ...death]);
+  }
+  if (team !== player.team) {
+    db.query('UPDATE user_details SET vehicles_destroyed = vehicles_destroyed + 1 WHERE id = ?', [player.userId]).catch((err) =>
+      console.error('ObjectDamage: failed to persist vehicles_destroyed:', err.message)
+    );
+  }
+  // ToXiiC's SP_RoomVehicleExplode / SP_RoomRespawnVehicle, without the Nexon-only field.
+  broadcastPacket(sockets, XOR.external, GAME_PACKET, [1, player.slot, room.id, 2, SUB.OBJECT_DESTROY,
+    0, 1, 0, v.id, player.slot, 0, 0, 0, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'FFFF']);
+  v.respawnTimer = setTimeout(() => {
+    v.respawnTimer = null;
+    if (room.state !== 2 || room.vehicles?.get(v.id) !== v) return;
+    V.resetVehicle(v);
+    broadcastPacket(roomSockets(room), XOR.external, GAME_PACKET, [1, -1, room.id, 2, SUB.VEHICLE_SPAWN,
+      0, 1, v.id, 0, 0, 0, 20, 1, 0, 0, 1200000, -1036745, 1200000, '0.0000', '0.0000', '0.0000', '0.0000', '0.0000', '0.0000', 0, 0, 'DV01']);
+  }, v.spawnMs);
+  return null;
+}
+
 const HANDLERS = {
   [VOTE_KICK]: handleVoteKick,
   [SUB.READY]: handleReady,
@@ -788,6 +968,11 @@ const HANDLERS = {
   [SUB.ARTILLERY]: handleArtillery,
   [SUB.ENVIRONMENT_DAMAGE]: handleEnvironmentDamage,
   [SUB.ROUND_END_CONFIRM]: handleRoundEndConfirm,
+  [SUB.ENTER_VEHICLE]: handleEnterVehicle,
+  [SUB.CHANGE_SEAT]: handleChangeSeat,
+  [SUB.LEAVE_VEHICLE]: handleLeaveVehicle,
+  [SUB.REPAIR]: handleRepair,
+  [SUB.OBJECT_DAMAGE]: handleObjectDamage,
 };
 
 // Ported from Game/Networking/GameDataHandler.cs' shared envelope: every

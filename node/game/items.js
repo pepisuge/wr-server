@@ -36,6 +36,8 @@ function toItem(row) {
     reqPremium: !!row.req_premium,
     cost: parseCsvNumbers(row.cost),
     power: Number(row.power) || 0,
+    // efficiency % against vehicles by kind (1 surface, 2 air, 3 ship): first value of item_target_info's lists
+    vs: [0, row.surface, row.air, row.ship].map((x) => Number(String(x ?? 0).split(',')[0]) || 0),
     slots,
     // Weapon.cs's CanEquip6Th: true if ANY class can equip this weapon in
     // slot index 5 (the 6th slot) - derived from the same matrix, no extra
@@ -49,7 +51,7 @@ async function loadItems(db) {
     SELECT w.id, w.code, w.active, w.name, 1 AS is_weapon,
            s.buyable, s.req_level, s.req_premium, s.cost,
            e.class1, e.class2, e.class3, e.class4, e.class5,
-           t.power
+           t.power, t.surface, t.air, t.ship
     FROM item_weapons w
     LEFT JOIN item_shop s ON s.code = w.code
     LEFT JOIN item_equipment e ON e.code = w.code

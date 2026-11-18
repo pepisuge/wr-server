@@ -15,6 +15,7 @@ const { loadClans, setAuthDb: setClanAuthDb } = require('./game/clan');
 const { loadItems } = require('./game/items');
 const { loadCoupons } = require('./game/coupon');
 const { loadMaps } = require('./game/maps');
+const { loadVehicles } = require('./game/vehicles');
 const { setAuthDb } = require('./game/gm');
 const { setAuthDb: setShopAuthDb } = require('./game/shop');
 const { startWeb } = require('./game/web');
@@ -54,6 +55,7 @@ async function main() {
   await loadItems(db);
   await loadCoupons(db);
   await loadMaps(db);
+  await loadVehicles(db);
 
   const handlers = createHandlers(db);
   const gameListener = net.createServer((socket) => {
